@@ -1,11 +1,13 @@
 import initSqlJs, { type Database } from 'sql.js';
 import type { ChatEvent, ToolCallEvent } from '../model/events.js';
-import { estimatePremiumRequestUnits } from '../pricing/estimateCost.js';
+import { estimateEventCost } from '../pricing/estimateCost.js';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS chat_events (
   span_id TEXT PRIMARY KEY,
   conversation_id TEXT NOT NULL,
+  chat_session_id TEXT,
+  turn_index INTEGER,
   timestamp_ms INTEGER NOT NULL,
   provider TEXT,
   requested_model TEXT,
@@ -13,14 +15,20 @@ CREATE TABLE IF NOT EXISTS chat_events (
   agent_name TEXT,
   input_tokens INTEGER,
   output_tokens INTEGER,
+  cached_tokens INTEGER,
+  cache_write_tokens INTEGER,
+  reasoning_tokens INTEGER,
   time_to_first_token_ms INTEGER,
+  usd_cost REAL,
   premium_request_units REAL,
-  pricing_confidence TEXT
+  cost_source TEXT
 );
 
 CREATE TABLE IF NOT EXISTS tool_call_events (
   span_id TEXT PRIMARY KEY,
   conversation_id TEXT NOT NULL,
+  chat_session_id TEXT,
+  turn_index INTEGER,
   timestamp_ms INTEGER NOT NULL,
   agent_name TEXT,
   tool_name TEXT,
@@ -39,6 +47,8 @@ export interface ModelAggregate {
   requestCount: number;
   totalInputTokens: number;
   totalOutputTokens: number;
+  totalCachedTokens: number;
+  totalUsdCost: number;
   totalPremiumRequestUnits: number;
 }
 
@@ -67,16 +77,20 @@ export class UsageDb {
   }
 
   insertChatEvent(event: ChatEvent): void {
-    const estimate = estimatePremiumRequestUnits(event.resolvedModel);
+    const cost = estimateEventCost(event);
+    const costSource = cost.usdSource ?? (cost.premiumRequestUnits != null ? 'estimated_multiplier' : 'no_match');
     this.db.run(
       `INSERT OR REPLACE INTO chat_events
-        (span_id, conversation_id, timestamp_ms, provider, requested_model, resolved_model,
-         agent_name, input_tokens, output_tokens, time_to_first_token_ms,
-         premium_request_units, pricing_confidence)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (span_id, conversation_id, chat_session_id, turn_index, timestamp_ms, provider,
+         requested_model, resolved_model, agent_name, input_tokens, output_tokens,
+         cached_tokens, cache_write_tokens, reasoning_tokens, time_to_first_token_ms,
+         usd_cost, premium_request_units, cost_source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         event.spanId,
         event.conversationId,
+        event.chatSessionId,
+        event.turnIndex,
         event.timestampMs,
         event.provider,
         event.requestedModel,
@@ -84,9 +98,13 @@ export class UsageDb {
         event.agentName,
         event.inputTokens,
         event.outputTokens,
+        event.cachedTokens,
+        event.cacheWriteTokens,
+        event.reasoningTokens,
         event.timeToFirstTokenMs,
-        estimate.units,
-        estimate.confidence
+        cost.usd,
+        cost.premiumRequestUnits,
+        costSource
       ]
     );
   }
@@ -94,12 +112,14 @@ export class UsageDb {
   insertToolCallEvent(event: ToolCallEvent): void {
     this.db.run(
       `INSERT OR REPLACE INTO tool_call_events
-        (span_id, conversation_id, timestamp_ms, agent_name, tool_name, tool_type,
-         tool_call_id, error_type, duration_ms)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (span_id, conversation_id, chat_session_id, turn_index, timestamp_ms, agent_name,
+         tool_name, tool_type, tool_call_id, error_type, duration_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         event.spanId,
         event.conversationId,
+        event.chatSessionId,
+        event.turnIndex,
         event.timestampMs,
         event.agentName,
         event.toolName,
@@ -119,6 +139,8 @@ export class UsageDb {
          COUNT(*) AS requestCount,
          COALESCE(SUM(input_tokens), 0) AS totalInputTokens,
          COALESCE(SUM(output_tokens), 0) AS totalOutputTokens,
+         COALESCE(SUM(cached_tokens), 0) AS totalCachedTokens,
+         COALESCE(SUM(usd_cost), 0) AS totalUsdCost,
          COALESCE(SUM(premium_request_units), 0) AS totalPremiumRequestUnits
        FROM chat_events
        GROUP BY model
@@ -129,6 +151,8 @@ export class UsageDb {
       requestCount: Number(r.requestCount),
       totalInputTokens: Number(r.totalInputTokens),
       totalOutputTokens: Number(r.totalOutputTokens),
+      totalCachedTokens: Number(r.totalCachedTokens),
+      totalUsdCost: Number(r.totalUsdCost),
       totalPremiumRequestUnits: Number(r.totalPremiumRequestUnits)
     }));
   }

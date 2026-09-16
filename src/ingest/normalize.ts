@@ -104,13 +104,22 @@ export function normalizeSpan(raw: unknown): NormalizeResult {
         requestedModel: getStringAttr(attrs, 'gen_ai.request.model'),
         resolvedModel: getStringAttr(attrs, 'gen_ai.response.model'),
         agentName: getStringAttr(attrs, 'gen_ai.agent.name'),
+        // Not part of the documented OTel gen_ai.* attribute set (confirmed only in the
+        // agent-traces.db column schema — see src/ingest/tracesDb.ts). Left null here
+        // rather than guessed-at attribute keys; populated when reading from the DB.
+        chatSessionId: null,
+        turnIndex: null,
         inputTokens: getNumberAttr(attrs, 'gen_ai.usage.input_tokens'),
         outputTokens: getNumberAttr(attrs, 'gen_ai.usage.output_tokens'),
+        cachedTokens: null,
+        cacheWriteTokens: null,
+        reasoningTokens: null,
         // Documented as seconds; normalize to ms for consistency with everything else.
         timeToFirstTokenMs: (() => {
           const seconds = getNumberAttr(attrs, 'copilot_chat.time_to_first_token');
           return seconds == null ? null : Math.round(seconds * 1000);
-        })()
+        })(),
+        realCreditsUsd: null
       },
       warning: null
     };
@@ -124,6 +133,8 @@ export function normalizeSpan(raw: unknown): NormalizeResult {
         spanId,
         timestampMs,
         agentName: getStringAttr(attrs, 'gen_ai.agent.name'),
+        chatSessionId: null,
+        turnIndex: null,
         toolName: getStringAttr(attrs, 'gen_ai.tool.name'),
         toolType: getStringAttr(attrs, 'gen_ai.tool.type'),
         toolCallId: getStringAttr(attrs, 'gen_ai.tool.call.id'),

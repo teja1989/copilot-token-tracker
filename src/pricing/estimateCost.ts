@@ -1,4 +1,7 @@
 import { PRICING_TABLE, type PricingConfidence } from './pricingTable.js';
+import { estimateDollarCost } from './tokenPricing.js';
+import { findBestMatch } from './modelMatch.js';
+import type { ChatEvent } from '../model/events.js';
 
 export interface PremiumRequestEstimate {
   /** Premium-request-equivalent units this one chat span consumed, or null if unknown. */
@@ -6,17 +9,6 @@ export interface PremiumRequestEstimate {
   matchedPattern: string | null;
   confidence: PricingConfidence | 'no_match';
   pricingAsOf: string;
-}
-
-/**
- * Resolved model ids from the API (e.g. `gpt-4o-2024-08-06`,
- * `claude-sonnet-4-6-20260201`) use dashes and date suffixes, while pricing-table
- * patterns are transcribed from human-readable marketing names (e.g. `claude-sonnet-4.6`)
- * which use dots. Stripping all non-alphanumeric characters before comparing avoids a
- * silent match failure from that formatting mismatch alone.
- */
-function normalizeForMatch(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
 /**
@@ -29,11 +21,7 @@ export function estimatePremiumRequestUnits(resolvedModel: string | null): Premi
   if (!resolvedModel) {
     return { units: null, matchedPattern: null, confidence: 'no_match', pricingAsOf: PRICING_TABLE.asOf };
   }
-  const normalized = normalizeForMatch(resolvedModel);
-  // Longest pattern first so a more specific entry (e.g. "gpt-4.1") is preferred over a
-  // shorter one that happens to also be a substring (e.g. "gpt-4").
-  const sortedEntries = [...PRICING_TABLE.entries].sort((a, b) => b.modelPattern.length - a.modelPattern.length);
-  const match = sortedEntries.find((entry) => normalized.includes(normalizeForMatch(entry.modelPattern)));
+  const match = findBestMatch(resolvedModel, PRICING_TABLE.entries);
   if (!match) {
     return { units: null, matchedPattern: null, confidence: 'no_match', pricingAsOf: PRICING_TABLE.asOf };
   }
@@ -42,5 +30,59 @@ export function estimatePremiumRequestUnits(resolvedModel: string | null): Premi
     matchedPattern: match.modelPattern,
     confidence: match.confidence,
     pricingAsOf: PRICING_TABLE.asOf
+  };
+}
+
+export type UsdSource = 'real' | 'estimated_token_rate';
+
+export interface EventCostEstimate {
+  /** Best-available dollar figure: GitHub's own real credit usage when present, else our token-rate estimate. Null if neither is computable. */
+  usd: number | null;
+  usdSource: UsdSource | null;
+  /**
+   * Computed independently of `usd`, not as a fallback: a legacy-multiplier account and a
+   * usage-based-billing account are mutually exclusive real-world plans, and we don't know
+   * which one the current user is on. Silently preferring whichever estimate happened to
+   * resolve first would present a confidently wrong number under the plan that doesn't
+   * apply. Both are surfaced; the caller (or a future "which plan am I on" setting)
+   * decides which is relevant.
+   */
+  premiumRequestUnits: number | null;
+  premiumRequestConfidence: PricingConfidence | 'no_match';
+}
+
+export function estimateEventCost(event: ChatEvent): EventCostEstimate {
+  const multiplierEstimate = estimatePremiumRequestUnits(event.resolvedModel);
+
+  if (event.realCreditsUsd != null) {
+    return {
+      usd: event.realCreditsUsd,
+      usdSource: 'real',
+      premiumRequestUnits: multiplierEstimate.units,
+      premiumRequestConfidence: multiplierEstimate.confidence
+    };
+  }
+
+  let usd: number | null = null;
+  let usdSource: UsdSource | null = null;
+  if (event.inputTokens != null && event.outputTokens != null) {
+    const dollarEstimate = estimateDollarCost(
+      event.resolvedModel,
+      event.inputTokens,
+      event.outputTokens,
+      event.cachedTokens,
+      event.cacheWriteTokens
+    );
+    if (dollarEstimate.usd != null) {
+      usd = dollarEstimate.usd;
+      usdSource = 'estimated_token_rate';
+    }
+  }
+
+  return {
+    usd,
+    usdSource,
+    premiumRequestUnits: multiplierEstimate.units,
+    premiumRequestConfidence: multiplierEstimate.confidence
   };
 }

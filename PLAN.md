@@ -46,26 +46,99 @@ Span shapes that matter to us:
   `Explore`) and `gen_ai.conversation.id` for session correlation. This is exactly the
   "which custom agent is burning tokens" signal you asked for.
 
-**Known gaps in this data, stated plainly:**
-- No cache-hit-rate attribute exists in the documented spec. Any tracker (including your
-  current one, if it shows this) claiming a cache-hit metric here is estimating, not
-  reading a real field — we will not claim this metric.
-- Cost / premium-request-multiplier is **not emitted** — GitHub doesn't tell you the price
-  of a model in a span. That still has to come from a pricing table we build and version
-  ourselves (same approach every competitor uses: `promptTokens/completionTokens × model
-  rate table`). This table will need periodic manual updates as GitHub changes pricing —
-  called out explicitly as ongoing maintenance, not a one-time build cost.
+**Known gaps in the documented OTel spec specifically** (corrected below — some of these
+turned out to be wrong once a real reference implementation was inspected):
 - Requires a Copilot Chat extension version recent enough to have this feature. Phase 0
-  below verifies this on your actual install before anything else is built.
+  verified this works on the current install.
 
-## Why this beats scraping local storage
+## Correction + verified richer source: `agent-traces.db`
 
-| | Local storage scraping (v1 plan, competitors' approach) | OTel emission (this plan) |
-|---|---|---|
-| Contract | None; private UI-persistence format (`chatSessions` moved from flat `.json` to a `.jsonl` mutation log between VS Code versions already) | Public, documented, versioned by Microsoft |
-| Stability | Can silently break on any update | Explicit monitoring feature with its own docs page |
-| Team rollup | Requires inventing a transport/schema ourselves | **Built in** — point `otlpEndpoint` at any OTLP collector, including one your team may already run (Tempo/Honeycomb/Datadog/etc.) |
-| Privacy default | Whatever's already on disk, including any code shown in-chat | Off by default; metadata-only unless explicitly opted into content capture |
+I was wrong earlier in this document (and out loud, in conversation) to say a competing
+extension's "SQLite `agent-traces.db`" was that extension's own cache rather than
+something Copilot writes. I checked by directly reading the source of two real, shipped,
+MIT-licensed VS Code extensions that already solve this problem —
+[`Hoxlegion/copilot-cost-tracker-vsc`](https://github.com/Hoxlegion/copilot-cost-tracker-vsc)
+(full source available) and
+[`assaelaz/copilot-cost-token-tracker`](https://github.com/assaelaz/copilot-cost-token-tracker)
+(the extension actually named "Copilot Cost & Token Tracker" — design specs available,
+implementation source was deliberately removed from the public repo by its author, so
+only its specs/README were used, not any withdrawn code) — rather than continuing to
+guess. Both confirm: Copilot Chat itself writes a real SQLite database at
+
+```
+<VS Code User dir>/globalStorage/github.copilot-chat/agent-traces.db
+```
+
+This is a single **global** file, shared across every workspace open on the machine (not
+per-workspace like `chatSessions`), with `spans` and `span_attributes` tables. Verified
+columns on `spans`: `span_id, trace_id, parent_span_id, name, start_time_ms, end_time_ms,
+status_code, operation_name, provider_name, agent_name, conversation_id, request_model,
+response_model, input_tokens, output_tokens, cached_tokens, reasoning_tokens, tool_name,
+chat_session_id, turn_index, ttft_ms`. `span_attributes` is a key/value table carrying
+sparser per-span extras, most importantly `copilot_chat.copilot_usage_nano_aiu` — **real,
+GitHub-reported credit consumption for that exact span** (nano AIU ÷ 1e9 = USD credits).
+
+This corrects two things stated above as gaps:
+- **Cost is not a gap.** When `copilot_chat.copilot_usage_nano_aiu` is present, that's
+  GitHub's own billing figure for that call, not an estimate. Our cost estimator now
+  prefers this over any table lookup whenever it's available (`src/pricing/estimateCost.ts`).
+- **Cache tokens are not a gap either** — `cached_tokens` is a real column. `cache_write_tokens`
+  genuinely is absent from this schema version (confirmed by both reference readers
+  hardcoding it), so that specific gap stands.
+- There's also a real, cited **$/token pricing table** ("GitHub Docs 'Models and pricing
+  for GitHub Copilot', 2026-06-03" per the reference implementation's own comment) for
+  when real credits aren't present — see `src/pricing/tokenPricing.ts`. Still flagged as
+  third-party-sourced, not independently verified against docs.github.com directly (that
+  domain is unreachable from this environment).
+
+One correctness-critical detail that would silently double every total if missed:
+Copilot emits a rollup span with `agent_name` exactly `"GitHub Copilot Chat"` at the
+conversation level, which duplicates the real per-surface spans underneath it and never
+carries the real-billing attribute. `src/ingest/tracesDb.ts` excludes it at the SQL
+`WHERE` level, not after fetching.
+
+**Partial correction on inline completions being fully out of scope**: `agent_name` values
+observed in the reference implementation's label map include `XtabProvider` ("Next Edit
+Suggestions") alongside `panel/editAgent` ("Inline Chat"), `summarizeConversationHistory`,
+`progressMessages`, and `title`. So VS Code's multi-line "Next Edit Suggestions" feature
+*is* tracked here — the earlier blanket claim that inline completion activity has zero
+accessible signal was too broad. Classic single-line ghost-text completions still aren't
+covered by anything found so far.
+
+This DB is populated without the user ever touching `github.copilot.chat.otel.*`
+settings — it appears to be Copilot's own always-on internal trace store, distinct from
+(though likely sourced from the same underlying span data as) the documented, opt-in OTel
+exporter settings above. Practically: **`agent-traces.db` is now the primary ingestion
+target** (`src/ingest/tracesDb.ts`, implemented), with the OTel file/OTLP exporter path
+(`src/ingest/normalize.ts` + `jsonlSource.ts`, also implemented) kept as a documented,
+tested fallback for whichever surfaces only emit through that path, or for accounts where
+the DB doesn't exist. A third source exists in the debug-logs JSONL format
+(`main.jsonl`/`runSubagent-*.jsonl`, per the assaelaz specs) with per-turn/per-call
+granularity the DB doesn't fully expose (e.g. explicit turn/call sequencing with
+summarization detection) — not yet implemented, noted here as a possible Phase 2+ addition
+if the DB's `turn_index` column proves insufficient for the deep-dive-style view.
+
+## Honest comparison of all three sources now in play
+
+Worth being direct that `agent-traces.db` (our primary source, per the correction above)
+is itself undocumented — it is not the public OTel contract this plan originally led
+with. The three sources sit on a real spectrum, not a clean "documented good, scraped bad"
+split:
+
+| | `chatSessions` (v1, rejected) | `agent-traces.db` (primary, implemented) | OTel file/OTLP exporter (fallback, implemented) |
+|---|---|---|---|
+| Contract | None; UI-persistence format that already changed shape once (flat `.json` → `.jsonl` mutation log) | None; internal trace store, but a clean columnar SQLite schema, not a mutation log | Public, documented, versioned by Microsoft |
+| Stability | Fragile, no external users to catch regressions | Two independent published extensions depend on this exact schema today, which at least means breakage gets noticed fast | Explicit monitoring feature with its own docs page |
+| Data richness | Full conversation content, no structured cost/token fields | Structured tokens including cache breakdown, real billing credits, turn index | Standard `gen_ai.*` fields only; no cache or real-credit data found |
+| Requires user setup | No | No — populated by default | Yes — three settings |
+| Team rollup | Would require inventing a transport ourselves | Same — no built-in remote export | **Built in** — point `otlpEndpoint` at any OTLP collector, including one your team may already run |
+| Privacy default | Whatever's on disk, including in-chat code | Metadata + real billing figures only, per what's been inspected so far | Off by default; metadata-only unless `captureContent` is explicitly turned on |
+
+Net effect on the plan: we get richer, more useful data than the original OTel-only design
+promised, at the cost of depending on one more undocumented (but externally-validated and
+structurally stable-looking) surface. The OTel path stays implemented and tested as a
+fallback specifically because it's the one part of this stack with an actual stability
+guarantee from Microsoft.
 
 We keep a **fallback path** to local-storage parsing (documented in the Appendix) only
 for historical backfill of sessions that happened before OTel was turned on — not as the

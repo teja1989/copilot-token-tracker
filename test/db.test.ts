@@ -12,9 +12,15 @@ function chatEvent(overrides: Partial<ChatEvent>): ChatEvent {
     requestedModel: 'gpt-4o',
     resolvedModel: 'gpt-4o-2024-08-06',
     agentName: 'copilot',
+    chatSessionId: 'chat-session-1',
+    turnIndex: 0,
     inputTokens: 100,
     outputTokens: 200,
+    cachedTokens: null,
+    cacheWriteTokens: null,
+    reasoningTokens: null,
     timeToFirstTokenMs: 500,
+    realCreditsUsd: null,
     ...overrides
   };
 }
@@ -26,6 +32,8 @@ function toolCallEvent(overrides: Partial<ToolCallEvent>): ToolCallEvent {
     spanId: 'tool-1',
     timestampMs: 1700000000500,
     agentName: 'copilot',
+    chatSessionId: 'chat-session-1',
+    turnIndex: 0,
     toolName: 'readFile',
     toolType: 'function',
     toolCallId: 'call-1',

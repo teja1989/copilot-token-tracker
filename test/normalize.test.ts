@@ -29,9 +29,15 @@ describe('normalizeSpan', () => {
       requestedModel: 'gpt-4o',
       resolvedModel: 'gpt-4o-2024-08-06',
       agentName: 'copilot',
+      chatSessionId: null,
+      turnIndex: null,
       inputTokens: 120,
       outputTokens: 340,
-      timeToFirstTokenMs: 820
+      cachedTokens: null,
+      cacheWriteTokens: null,
+      reasoningTokens: null,
+      timeToFirstTokenMs: 820,
+      realCreditsUsd: null
     });
   });
 
@@ -83,6 +89,8 @@ describe('normalizeSpan', () => {
       spanId: 'span-3',
       timestampMs: 1700000200000,
       agentName: 'copilot',
+      chatSessionId: null,
+      turnIndex: null,
       toolName: 'readFile',
       toolType: 'function',
       toolCallId: 'call-1',
