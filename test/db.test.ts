@@ -89,4 +89,23 @@ describe('UsageDb', () => {
 
     db.close();
   });
+
+  it('survives an export/load round trip (persistence across VS Code restarts)', async () => {
+    const db1 = await UsageDb.create();
+    db1.insertChatEvent(chatEvent({ spanId: 'span-1', timestampMs: 1700000000000 }));
+    db1.insertToolCallEvent(toolCallEvent({ spanId: 'tool-1', timestampMs: 1700000005000 }));
+    const bytes = db1.exportBytes();
+    db1.close();
+
+    const db2 = await UsageDb.load(bytes);
+    expect(db2.aggregateByModel().reduce((sum, m) => sum + m.requestCount, 0)).toBe(1);
+    expect(db2.getLatestTimestampMs()).toBe(1700000005000);
+    db2.close();
+  });
+
+  it('reports null latest timestamp on an empty database rather than 0', async () => {
+    const db = await UsageDb.create();
+    expect(db.getLatestTimestampMs()).toBeNull();
+    db.close();
+  });
 });

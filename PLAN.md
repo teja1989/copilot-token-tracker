@@ -185,30 +185,45 @@ first avoids building the wrong parser.
   normal chat spans, tool-call spans, multi-model sessions, and malformed/missing-field
   spans (fail-safe, not silent-wrong-number).
 
-### Phase 2 — Local extension MVP
+### Phase 2 — Local extension MVP — MVP BUILT, UNVERIFIED IN A REAL VS CODE WINDOW
 
-- Extension activates the ingestion layer, watches the local exporter output.
-- Status bar: rolling today/week token & estimated cost.
-- Webview dashboard (built per the dataviz skill once we get here): per-model breakdown,
-  per-agent breakdown (this is where custom-agent efficiency becomes visible), trend over
-  time, tool-call frequency by agent.
-- Efficiency signals, now backed by real fields instead of inferred ones:
+Built: activation, a status bar item, `openDashboard`/`refresh` commands, 30-second
+polling of `agent-traces.db` with incremental (`sinceMs`-watermarked) ingestion,
+persistence of the `UsageDb` to `context.globalStorageUri` so history survives a restart,
+and a webview dashboard (stat cards + per-model and per-agent Chart.js bar charts). See
+`src/extension.ts` and `media/`.
+
+**Not done from the original scope of this phase**: trend-over-time charting (currently
+aggregate-to-date only, no time-series view), and the efficiency-signal heuristics listed
+below — the dashboard shows raw aggregates, not recommendations, so far. Also not done:
+any automated test coverage for `extension.ts` itself (see README "Known open items") —
+everything it calls into is tested, the activation/wiring layer isn't.
+
+Efficiency signals still to build (not started):
   - Agent/mode defaulting to a frontier model on turns with small token counts — flag as
     a candidate for pinning to a cheaper model.
   - Sessions with many chat spans per `conversation.id` relative to output size (prompt
     quality signal).
   - Tool-call error rate per agent (`error.type` present) — wasted round-trips.
-- Still entirely local, no network, in this phase.
 
-### Phase 3 — Packaging for team install
+Still entirely local, no network, in this phase — confirmed true of what's actually built,
+not just the plan: `refresh()` in `extension.ts` only ever touches the local
+`agent-traces.db` file and `context.globalStorageUri`.
 
-- `.vsix` packaging + versioned releases.
-- Bundled setup helper: a command that writes the required `github.copilot.chat.otel.*`
-  settings into the user's `settings.json` for them (with confirmation — this is a real
-  settings write, not read-only, and gets called out to the user before it happens).
-- Privacy note bundled with the extension: exactly what's read, what never leaves the
-  machine, and how `captureContent` interacts with this tool if a teammate has it on.
-- CI runs the Phase 1 fixture tests on every change.
+### Phase 3 — Packaging for team install — PARTIALLY DONE
+
+Done: `.vsix` packaging via `npm run package` (esbuild bundle + `vsce package`), trimmed
+to ~418 KB by bundling `sql.js`'s JS directly instead of shipping its full ~23 MB package
+(see `scripts/build-extension.mjs`).
+
+Not done:
+- Versioned releases / a release process.
+- The settings-write helper for `github.copilot.chat.otel.*` — moot for now since the
+  primary data source (`agent-traces.db`) needs no settings changes; would only matter if
+  Phase 0's OTel fallback path becomes load-bearing.
+- A privacy note bundled *inside* the extension UI itself (README covers this, but a
+  teammate installing the `.vsix` directly won't necessarily read the README first).
+- CI. Tests run locally (`npm test`) but nothing runs them automatically on push yet.
 
 ### Phase 4 — Team rollup (now unblocked by the OTel design itself)
 

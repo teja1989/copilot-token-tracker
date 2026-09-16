@@ -4,25 +4,63 @@ Local-first VS Code Copilot Chat/Agent usage tracker. See [`PLAN.md`](./PLAN.md)
 design rationale, the schema verification against two reference implementations, and the
 phased roadmap — including a correction of an earlier wrong claim, worth reading.
 
-## Status: not yet installable as a VS Code extension
+## Status: installable `.vsix` exists (v0.1, unverified in a real VS Code window)
 
-**What exists**: a tested, standalone TypeScript library that reads Copilot Chat's local
-trace data, normalizes it, estimates cost, and stores aggregates. Zero VS Code dependency
-so far — it's plain Node, runnable and testable on its own (that's deliberate: get the
-data model right before building UI on top of it).
+**What exists now**: a real extension — status bar item, a "Copilot Token Tracker: Open
+Dashboard" command, a webview dashboard (stat cards + two Chart.js charts, by model and
+by agent), 30-second polling of `agent-traces.db` with incremental ingestion, and
+persistence to the extension's own storage so history survives a VS Code restart. It
+builds and packages cleanly: `npm run package` produces a 418 KB `.vsix`
+(10 files — trimmed from an initial 9.17 MB by bundling `sql.js`'s JS directly and
+shipping only the one `.wasm` file it needs instead of that package's full ~23 MB of
+build variants).
 
-**What's missing before this can be installed in VS Code** (all Phase 2, not started):
+**What has NOT been verified, stated plainly**: this was built in a sandboxed environment
+with no VS Code binary available, so nobody has actually installed this `.vsix` and
+clicked around it yet. Bundle-loads-without-crashing was checked (`node -e
+"require('./dist-ext/extension.cjs')"` fails only on the intentionally-external `vscode`
+module, meaning everything else resolved cleanly), and the underlying data logic has 28
+passing tests plus a real-data dry run — but activation, the status bar, and the webview
+itself have zero automated coverage and zero manual verification. **You need to install
+it and confirm it actually works before trusting it further.**
 
-- [ ] `package.json` extension manifest fields (`engines.vscode`, `main`, `activationEvents`, `contributes`)
-- [ ] An actual extension entry point (`src/extension.ts` with `activate()`/`deactivate()`)
-- [ ] A file watcher wired to `agent-traces.db` so the extension notices new data without polling forever
-- [ ] Any UI at all — status bar item, sidebar, or dashboard webview
-- [ ] `.vscodeignore` + packaging via `@vscode/vsce` into a `.vsix`
-- [ ] Manual verification by loading the unpacked extension in an Extension Development Host (`F5` in VS Code) before trusting a packaged `.vsix`
+### Installing it
 
-None of this is hard given what's already built — the hard part (figuring out where the
-real data lives and what it actually contains) is done and tested. But "not started" is
-the honest answer to "can I install this today": no.
+```
+npm install
+npm run package          # produces copilot-token-tracker-0.1.0.vsix
+code --install-extension copilot-token-tracker-0.1.0.vsix
+```
+
+Or in VS Code: Extensions view → `...` menu → "Install from VSIX..." → pick the file.
+
+After installing: look for a status bar item (bottom right) that should read either
+"Copilot: no data yet" or "⚡ Copilot: N req"; run **Copilot Token Tracker: Open
+Dashboard** from the Command Palette. If Copilot Chat/Agent Mode has been used at all,
+`agent-traces.db` should already exist and the dashboard should show real data within the
+30-second poll interval (or immediately, since activation triggers one refresh
+up front).
+
+**If anything looks wrong** (status bar never updates, dashboard stays empty when you know
+you've used Copilot, an error notification appears): open the "Copilot Token Tracker"
+output channel (Output panel → dropdown) for `[refresh]` log lines showing read/ingested/
+warning counts, and report back what you see — that log line plus what the status bar
+shows is enough to diagnose it without needing to share any real data.
+
+### What's still missing for a polished v1 (not blocking basic install/use)
+
+- [ ] Automated tests for `extension.ts` itself (activation, command registration,
+      message handling) — everything below it is tested, this glue layer isn't, because
+      it's tightly coupled to the `vscode` API and wasn't worth adding
+      `@vscode/test-electron` for at this stage.
+- [ ] An extension icon (cosmetic; `vsce package` just warns without one).
+- [ ] A `LICENSE` file (`vsce package` warns about this too — deliberately not adding one
+      without you deciding the terms).
+- [ ] Real-time updates instead of a 30-second poll (there's a manual "Refresh Now"
+      command in the meantime).
+- [ ] Efficiency-insight heuristics (flagging frontier-model-on-trivial-turns, retry
+      patterns, etc.) — Phase 2 of `PLAN.md` scoped these; the dashboard currently shows
+      raw aggregates only, no recommendations yet.
 
 ## Testing this now (before there's an extension to load)
 
@@ -93,9 +131,15 @@ path.
 npm install
 npm run typecheck
 npm test
-npm run build
-npm run inspect:traces   # smoke test against your real local data
+npm run build             # compiles the library to dist/ (used by tools/, not the extension)
+npm run inspect:traces    # smoke test against your real local data
+npm run build:ext         # bundles src/extension.ts -> dist-ext/extension.cjs + sql-wasm.wasm
+npm run package           # runs build:ext, then vsce package -> the installable .vsix
 ```
+
+`dist/` (plain tsc output, used by `tools/`) and `dist-ext/` (the esbuild-bundled
+extension, used by the packaged `.vsix`) are two separate build outputs for two separate
+purposes — the `.vsix` does not ship `dist/` at all (see `.vscodeignore`).
 
 ## Layout
 
@@ -118,6 +162,15 @@ npm run inspect:traces   # smoke test against your real local data
 - `tools/inspect-copilot-storage.mjs` — an older reconnaissance script for the (now
   secondary) `chatSessions` storage format; kept for the Appendix fallback path in
   `PLAN.md`, not part of the primary pipeline.
+- `src/extension.ts` — the actual VS Code extension: activation, status bar, the
+  `openDashboard`/`refresh` commands, polling + incremental ingestion, and persistence to
+  `context.globalStorageUri`.
+- `media/` — the webview's HTML/CSS/JS and a vendored Chart.js UMD build (see
+  `media/THIRD_PARTY_NOTICES.md` for its license).
+- `scripts/build-extension.mjs` — esbuild bundling for `extension.ts`; bundles `sql.js`'s
+  JS directly (not left as an external `node_modules` dependency) and copies only the one
+  `.wasm` file actually needed, which is why the packaged `.vsix` is ~418 KB instead of
+  the ~9 MB a naive `vsce package` produces when it includes all of `node_modules/sql.js`.
 
 ## Known open items
 

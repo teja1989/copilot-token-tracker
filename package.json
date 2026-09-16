@@ -1,15 +1,42 @@
 {
   "name": "copilot-token-tracker",
+  "displayName": "Copilot Token Tracker",
+  "description": "Local-first Copilot Chat/Agent usage, token, and cost dashboard",
   "version": "0.1.0",
-  "private": true,
-  "description": "Local-first Copilot Chat/Agent usage tracker built on OpenTelemetry GenAI spans",
+  "publisher": "local-team",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/teja1989/copilot-token-tracker"
+  },
+  "engines": {
+    "vscode": "^1.85.0",
+    "node": ">=18"
+  },
+  "categories": ["Other"],
   "type": "module",
+  "main": "./dist-ext/extension.cjs",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "commands": [
+      {
+        "command": "copilotTokenTracker.openDashboard",
+        "title": "Copilot Token Tracker: Open Dashboard"
+      },
+      {
+        "command": "copilotTokenTracker.refresh",
+        "title": "Copilot Token Tracker: Refresh Now"
+      }
+    ]
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "inspect:traces": "npm run build && node tools/inspect-traces-db.mjs"
+    "inspect:traces": "npm run build && node tools/inspect-traces-db.mjs",
+    "vscode:prepublish": "node scripts/build-extension.mjs",
+    "build:ext": "node scripts/build-extension.mjs",
+    "package": "npm run build:ext && npx @vscode/vsce package --no-yarn"
   },
   "dependencies": {
     "sql.js": "^1.13.0"
@@ -17,6 +44,10 @@
   "devDependencies": {
     "@types/node": "^22.10.0",
     "@types/sql.js": "^1.4.9",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.2.1",
+    "chart.js": "^4.4.7",
+    "esbuild": "^0.28.0",
     "typescript": "^5.7.2",
     "vitest": "^5.0.1"
   }

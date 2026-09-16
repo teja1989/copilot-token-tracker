@@ -69,11 +69,46 @@ function execToObjects(db: Database, sql: string): Record<string, unknown>[] {
 export class UsageDb {
   private constructor(private readonly db: Database) {}
 
-  static async create(): Promise<UsageDb> {
-    const SQL = await initSqlJs();
-    const db = new SQL.Database();
+  static async create(wasmBinaryPath?: string): Promise<UsageDb> {
+    return UsageDb.load(undefined, wasmBinaryPath);
+  }
+
+  /**
+   * Creates a fresh DB, or restores one previously persisted via `exportBytes()`.
+   * Used by the extension host to survive VS Code restarts: sql.js is in-memory only,
+   * so persistence means serializing to a file (globalStorage) and reloading it here on
+   * activation, not anything the library does automatically.
+   *
+   * `wasmBinaryPath`, when given, is passed through as sql.js's `locateFile` target. The
+   * packaged extension bundles sql.js's JS directly (not as a separate node_modules
+   * package — see scripts/build-extension.mjs) and ships only the one .wasm file it
+   * actually needs, so it has to tell sql.js exactly where that file landed. Left
+   * undefined in tests/dev tooling, where sql.js's own default resolution (via its real
+   * node_modules location) already works.
+   */
+  static async load(bytes?: Uint8Array, wasmBinaryPath?: string): Promise<UsageDb> {
+    const SQL = await initSqlJs(wasmBinaryPath ? { locateFile: () => wasmBinaryPath } : undefined);
+    const db = bytes ? new SQL.Database(bytes) : new SQL.Database();
     db.run(SCHEMA);
     return new UsageDb(db);
+  }
+
+  exportBytes(): Uint8Array {
+    return this.db.export();
+  }
+
+  /** Latest ingested event timestamp, for incremental "only fetch spans newer than this" ingestion. */
+  getLatestTimestampMs(): number | null {
+    const rows = execToObjects(
+      this.db,
+      `SELECT MAX(ts) AS latest FROM (
+         SELECT MAX(timestamp_ms) AS ts FROM chat_events
+         UNION ALL
+         SELECT MAX(timestamp_ms) AS ts FROM tool_call_events
+       )`
+    );
+    const value = rows[0]?.['latest'];
+    return value == null ? null : Number(value);
   }
 
   insertChatEvent(event: ChatEvent): void {
