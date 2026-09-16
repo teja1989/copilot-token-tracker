@@ -1,0 +1,22 @@
+{
+  "name": "copilot-token-tracker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first Copilot Chat/Agent usage tracker built on OpenTelemetry GenAI spans",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "sql.js": "^1.13.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/sql.js": "^1.4.9",
+    "typescript": "^5.7.2",
+    "vitest": "^5.0.1"
+  }
+}

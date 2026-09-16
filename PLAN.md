@@ -95,7 +95,7 @@ If this fails to produce data on your version, we pivot Phase 1 to the local-sto
 fallback (Appendix) instead — the plan branches cleanly on this one fact, so verifying it
 first avoids building the wrong parser.
 
-### Phase 1 — Span ingestion + normalization core
+### Phase 1 — Span ingestion + normalization core — DONE (see `src/`, `test/`)
 
 - A **span ingestion layer** that's transport-agnostic: it consumes a stream of OTel spans
   regardless of whether they arrived by tailing a local JSONL file (personal mode) or via
