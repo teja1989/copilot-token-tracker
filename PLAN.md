@@ -169,6 +169,24 @@ settings.
 
 ## Security posture
 
+- **User identity in the telemetry, checked directly against Microsoft's own docs**: no
+  GitHub username, account id, email, machine id, or workspace/repo path in default
+  span/resource attributes. Microsoft's own monitoring docs state it explicitly: "No PII
+  in default attributes." Two opaque correlation ids do exist — `session.id` (per VS Code
+  window) and `gen_ai.conversation.id` (per conversation) — neither carries identity, but
+  in a small team, correlating their timestamps against other known activity could
+  theoretically re-identify a person. Not a designed risk, worth remembering if this data
+  is ever pooled. `enduser.id`/`enduser.pseudo.id` exist in the broader OTel spec for apps
+  that want to tag end-user identity — unconfirmed whether Copilot's implementation
+  populates either, since no real captured span has been checked yet. If a fixture sample
+  ever surfaces one, treat it as PII and exclude it from normalization, don't just pass it
+  through because the schema happens to offer it.
+- Org admins can inject custom resource attributes (`team.id`, `department`, etc.) via
+  `OTEL_RESOURCE_ATTRIBUTES` for org-wide export, and GitHub shipped enterprise-managed
+  OTel export (pinned endpoint + resource attributes + content-capture policy, centrally
+  configured) in July 2026. Both are admin-opt-in, not something Copilot adds unprompted —
+  and if the org ever turns on enterprise-managed export, that becomes the real Phase 4
+  team-rollup path instead of anything we'd build ourselves.
 - No network calls in personal mode (Phases 0–3): file-tailing only.
 - The extension's own settings-write helper (Phase 3) requires explicit user confirmation
   before touching `settings.json`.
