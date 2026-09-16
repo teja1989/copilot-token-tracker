@@ -1,17 +1,67 @@
 # copilot-token-tracker
 
-Local-first VS Code Copilot Chat/Agent usage tracker. Primary data source is Copilot
-Chat's own local trace database (`agent-traces.db`), with Microsoft's documented
-OpenTelemetry span emission kept as a tested fallback. See [`PLAN.md`](./PLAN.md) for the
-full design rationale, the schema verification against two reference implementations, and
-the phased roadmap — including a correction of an earlier wrong claim about where this
-data comes from, which is worth reading if you only read one section.
+Local-first VS Code Copilot Chat/Agent usage tracker. See [`PLAN.md`](./PLAN.md) for full
+design rationale, the schema verification against two reference implementations, and the
+phased roadmap — including a correction of an earlier wrong claim, worth reading.
 
-## Status
+## Status: not yet installable as a VS Code extension
 
-Phase 1 (span ingestion + normalization core) is implemented and tested, covering both
-data sources. There is no VS Code extension UI yet — this is a standalone, testable core
-library that Phase 2 will wrap in an actual extension.
+**What exists**: a tested, standalone TypeScript library that reads Copilot Chat's local
+trace data, normalizes it, estimates cost, and stores aggregates. Zero VS Code dependency
+so far — it's plain Node, runnable and testable on its own (that's deliberate: get the
+data model right before building UI on top of it).
+
+**What's missing before this can be installed in VS Code** (all Phase 2, not started):
+
+- [ ] `package.json` extension manifest fields (`engines.vscode`, `main`, `activationEvents`, `contributes`)
+- [ ] An actual extension entry point (`src/extension.ts` with `activate()`/`deactivate()`)
+- [ ] A file watcher wired to `agent-traces.db` so the extension notices new data without polling forever
+- [ ] Any UI at all — status bar item, sidebar, or dashboard webview
+- [ ] `.vscodeignore` + packaging via `@vscode/vsce` into a `.vsix`
+- [ ] Manual verification by loading the unpacked extension in an Extension Development Host (`F5` in VS Code) before trusting a packaged `.vsix`
+
+None of this is hard given what's already built — the hard part (figuring out where the
+real data lives and what it actually contains) is done and tested. But "not started" is
+the honest answer to "can I install this today": no.
+
+## Testing this now (before there's an extension to load)
+
+Two layers, both already working:
+
+### 1. Automated tests (fixture-based, no real data needed)
+
+```
+npm install
+npm run typecheck
+npm test
+```
+
+26 tests across normalization, the traces-DB reader, and both pricing paths, run against
+synthetic fixtures built to match the verified real schema — not against your actual
+data. This is what CI would run and is the fast, repeatable layer.
+
+### 2. Smoke test against YOUR real `agent-traces.db`
+
+This is the layer that actually tells you whether the schema assumptions hold on your
+machine, not just against synthetic fixtures:
+
+```
+npm run inspect:traces
+```
+
+This builds the project and runs `tools/inspect-traces-db.mjs` through the real
+ingestion/storage code (not a reimplementation) against your actual local database. It
+prints **aggregates only** — model names, agent/surface names, token totals, cost
+estimates, a count of any rows that failed to normalize — and never touches or prints
+prompt/response content or file paths beyond the DB's own location. If a model or agent
+name in the output looks wrong, or the row/warning counts look off, that's a real signal
+something in the schema assumptions needs fixing — and the printed output is safe to
+paste back for debugging, since there's nothing in it that wasn't already an aggregate
+number or a model/agent name.
+
+If it reports "No agent-traces.db found," either you haven't used Copilot Chat/Agent mode
+enough yet for Copilot to have created it, or your install uses a path this tool doesn't
+check yet (pass `--path` to point it at a specific file).
 
 ## Data sources
 
@@ -44,6 +94,7 @@ npm install
 npm run typecheck
 npm test
 npm run build
+npm run inspect:traces   # smoke test against your real local data
 ```
 
 ## Layout
@@ -63,6 +114,10 @@ npm run build
   why) and prefers real per-span billing data over either when present.
 - `src/storage/db.ts` — `sql.js` (WASM SQLite, no native compilation) storage with
   per-model and per-agent aggregate queries.
+- `tools/inspect-traces-db.mjs` — the real-data smoke test described above.
+- `tools/inspect-copilot-storage.mjs` — an older reconnaissance script for the (now
+  secondary) `chatSessions` storage format; kept for the Appendix fallback path in
+  `PLAN.md`, not part of the primary pipeline.
 
 ## Known open items
 
@@ -74,4 +129,4 @@ npm run build
   see the docstrings in `src/pricing/pricingTable.ts` and `tokenPricing.ts`.
 - `cache_write_tokens` is confirmed absent from the current `agent-traces.db` schema
   version; always `null` from that path.
-- No VS Code extension manifest/activation yet (Phase 2).
+- No VS Code extension manifest/activation yet — see the Status checklist above.
