@@ -25,8 +25,48 @@
       {
         "command": "copilotTokenTracker.refresh",
         "title": "Copilot Token Tracker: Refresh Now"
+      },
+      {
+        "command": "copilotTokenTracker.syncNow",
+        "title": "Copilot Token Tracker: Sync to Team Now"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Copilot Token Tracker",
+      "properties": {
+        "copilotTokenTracker.export.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Send usage metadata to your team's collector. Off by default — nothing leaves this machine unless you turn this on and set an endpoint."
+        },
+        "copilotTokenTracker.export.endpoint": {
+          "type": "string",
+          "default": "",
+          "description": "Your team's ingestion API URL. Required for export to do anything even when enabled."
+        },
+        "copilotTokenTracker.export.authHeader": {
+          "type": "string",
+          "default": "",
+          "description": "Full Authorization header value sent with each export request, e.g. \"Bearer <token>\". Left empty, no auth header is sent."
+        },
+        "copilotTokenTracker.export.orgId": {
+          "type": "string",
+          "default": "",
+          "description": "A static org/team identifier included on every exported document."
+        },
+        "copilotTokenTracker.export.identity": {
+          "type": "string",
+          "enum": ["pseudonymous", "anonymous"],
+          "default": "pseudonymous",
+          "description": "\"pseudonymous\" tags exports with a salted hash of your git email (or OS username as fallback) so per-person trends work without exporting your real identity. \"anonymous\" sends no user identifier at all."
+        },
+        "copilotTokenTracker.export.pseudonymSalt": {
+          "type": "string",
+          "default": "",
+          "description": "Shared org-wide secret for pseudonymization. Must be the SAME value on every teammate's machine for cross-machine trends to work — ask whoever runs your team's collector for this value. Left empty, each machine falls back to its own random salt (stable per-machine, but the same person looks like a different user on each machine)."
+        }
+      }
+    }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

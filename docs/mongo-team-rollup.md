@@ -100,51 +100,60 @@ decision below before it can ship, but this is the query a team lead actually as
 **6. Daily trend per agent** (`dailyCostByAgent`) — the shape a "is this getting worse"
 chart needs; not much signal in 3 days of seed data, but the pipeline is real.
 
-## Open decisions (need your answer before building the exporter)
+## Decisions made, and what got built from them
 
-### 1. Identity model
+### 1. Identity model: pseudonymous (option B)
 
-Copilot's own telemetry carries no identity at all (confirmed earlier in `PLAN.md`'s
-security posture section) — any `userId` in this schema has to come from *our*
-extension, which means it's a real consent decision, not a technical one:
+Implemented in `src/export/pseudonymize.ts` and `src/export/identity.ts`: a keyed hash
+(HMAC-SHA256, not a bare hash — a bare hash of an email is trivially reversible by
+dictionary attack against a list of the org's addresses, which is to say by anyone) of
+the person's git `user.email` (falling back to OS username when git isn't configured),
+truncated and prefixed `u_`. The hash key (salt) matters more than it might look:
 
-| Option | What it enables | Cost |
-|---|---|---|
-| **A. Fully anonymous** — random `installationId` only, no `userId` field at all | "20 machines used `Plan` N times" | Can't build query 5 (the leaderboard) at all |
-| **B. Pseudonymous** — a stable hash of something the person already has (git `user.email`, OS username) | Query 5 works; trends per-person over time work; not reversible to a name without a side table your org keeps separately | Someone has to decide whether "not reversible without extra effort" is enough privacy, or whether it's security theater |
-| **C. Real identity** — actual email/SSO identity, sent in clear | Full accountability, a real leaderboard with names | Ties usage timing/model/agent patterns to a named person — needs explicit notice, not just a technical default |
+- **An org-wide salt** (`copilotTokenTracker.export.pseudonymSalt`, the same value on
+  every teammate's machine) makes the same person's pseudonym stable across their own
+  machines — needed for query 5 (the leaderboard) and any per-person trend to mean
+  anything.
+- **No salt configured** → each machine falls back to its own random salt, persisted
+  locally (`resolveExportSalt()` in `extension.ts`) so it's at least stable across
+  restarts on that one machine, logged once as a warning. The same person on two
+  machines then looks like two different people. This is the default today because no
+  org salt exists yet — set one when you're ready for cross-machine trends to work.
+- `copilotTokenTracker.export.identity: "anonymous"` skips all of this and sends `userId: null`.
 
-I'd default to **B** as the reasonable middle ground for an internal team tool, with C as
-an opt-in per-person toggle for teams that explicitly want named leaderboards — but this
-is an org-norms call, not mine to make silently.
+### 2. Send frequency: piggybacked on the existing poll loop, batched, pluggable transport
 
-### 2. Send frequency and the wrapper API's shape
+The wrapper API's real contract (auth scheme, exact request/response shape) still isn't
+decided — so `src/export/sink.ts` defines an `ExportSink` interface and ships
+`HttpBatchSink` as the concrete default (`POST {endpoint} {"events": [...]}`, chunked at
+200 docs, one `authHeader` value sent verbatim). Swapping in whatever the real contract
+turns out to be is a one-file change; nothing else in the export path knows which sink
+is in use.
 
-The extension already has a working 30-second poll loop with a `sinceMs` watermark
-(`refresh()` in `src/extension.ts`) that ingests new local events incrementally. The
-natural, lowest-risk design reuses that exact mechanism rather than inventing a second
-one:
+Built exactly as planned: `src/storage/db.ts` tracks the export watermark separately
+from the local-ingestion watermark (`getExportWatermarkMs`/`setExportWatermarkMs`, its
+own tiny table in the same sql.js DB, so it persists for free). `src/export/
+exportManager.ts` reads unexported rows, sends them, and advances the watermark **only**
+on success — a thrown error from the sink leaves the watermark untouched, so the next
+30-second cycle retries the exact same rows, and because every document upserts by
+`spanId`, a retried batch is always safe, never a duplicate. `refresh()` in
+`extension.ts` calls this and swallows (logs, doesn't rethrow) any export failure so it
+can never break local ingestion or the dashboard. A manual "Sync Now" command
+(`copilotTokenTracker.syncNow`) re-reads settings and forces a cycle immediately.
 
-- Track a **separate** `lastExportedMs` watermark from the existing `lastIngestedMs` one
-  — export failure (API down, network blip) must never block local ingestion, and local
-  ingestion must never be gated on export succeeding.
-- On each existing 30-second cycle, POST whatever was newly ingested locally in that
-  cycle (already computed, already has cost fields) to your wrapper API, capped at some
-  batch size (e.g. 200 docs/call — chunk larger backlogs, e.g. after being offline).
-  Cap policy is fine to tune once you know real event volume; not committing to 200 here.
-- On failure: leave `lastExportedMs` where it was, back off (exponential, capped), retry
-  next cycle. Nothing is lost — the local SQLite store already has everything.
-- A manual "Sync Now" command, mirroring the existing "Refresh Now" command.
-
-What I need from you to build the actual client: the wrapper API's contract — endpoint
-URL, auth (a static token per install? per-org?), and whether it wants one document per
-call or accepts a batch array in one POST body (batch is strongly preferable — 200
-individual requests every 30 seconds across a team does not scale).
+Export is **off by default** (`copilotTokenTracker.export.enabled: false`) and does
+nothing until both `enabled: true` and a non-empty `endpoint` are set.
 
 ## What's NOT built yet
 
-Everything above is schema + seed data + query design, run against synthetic data. Not
-built: the actual export code path in `extension.ts`, the wrapper API itself (yours to
-build — happy to help once its contract is decided), or any consent/opt-in UI for
-whichever identity option gets picked. All of that is real Phase 4 execution, blocked on
-the two decisions above.
+- The wrapper API itself — yours to build. `HttpBatchSink`'s request shape is a
+  reasonable default guess, not a confirmed contract; tell me the real one once it
+  exists and I'll adjust `sink.ts` to match (should be small).
+- Any consent/notice UI shown to a teammate before their machine starts exporting —
+  right now it's a settings value, which is enough for an internally-rolled-out team
+  tool but not a substitute for actually telling people what turning this on does.
+- Retry backoff beyond "the next 30-second cycle retries automatically" — deliberately
+  simple for now (see `sink.ts`'s docstring for why); revisit if the wrapper API turns
+  out to need more sophisticated backoff under load.
+- None of this has been tested against a real MongoDB instance or a real wrapper API —
+  only against 50 passing unit tests with mocked `fetch` and an in-memory sql.js DB.

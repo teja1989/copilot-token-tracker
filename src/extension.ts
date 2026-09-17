@@ -1,16 +1,27 @@
 import * as vscode from 'vscode';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { findExistingTracesDbPath } from './ingest/vscodePaths.js';
 import { readTraceSpansFromFile } from './ingest/tracesDb.js';
 import { UsageDb, type ModelAggregate, type AgentAggregate } from './storage/db.js';
+import { exportNewEvents } from './export/exportManager.js';
+import { HttpBatchSink, type ExportSink } from './export/sink.js';
+import { pseudonymizeIdentity } from './export/pseudonymize.js';
+import { resolveRawIdentity } from './export/identity.js';
+import type { ExportEnvelope } from './export/toExportDocument.js';
 
 const REFRESH_INTERVAL_MS = 30_000;
 const PERSIST_FILENAME = 'usage.sqlite';
+const INSTALLATION_ID_KEY = 'installationId';
+const FALLBACK_SALT_KEY = 'exportFallbackSalt';
+const EXTENSION_VERSION = '0.1.0'; // kept in sync with package.json "version" by hand — no VS Code API reads it back reliably pre-activation
 
 let usageDb: UsageDb | undefined;
 let statusBarItem: vscode.StatusBarItem | undefined;
 let currentPanel: vscode.WebviewPanel | undefined;
 let refreshTimer: ReturnType<typeof setInterval> | undefined;
 let outputChannel: vscode.OutputChannel | undefined;
+let exportSink: ExportSink | undefined;
+let exportEnvelope: ExportEnvelope | undefined;
 
 interface DashboardPayload {
   dbFound: boolean;
@@ -41,6 +52,77 @@ async function loadPersistedDb(context: vscode.ExtensionContext): Promise<UsageD
 
 async function persistDb(context: vscode.ExtensionContext, db: UsageDb): Promise<void> {
   await vscode.workspace.fs.writeFile(persistUri(context), db.exportBytes());
+}
+
+function getOrCreateInstallationId(context: vscode.ExtensionContext): string {
+  let id = context.globalState.get<string>(INSTALLATION_ID_KEY);
+  if (!id) {
+    id = `ext-${randomUUID()}`;
+    void context.globalState.update(INSTALLATION_ID_KEY, id);
+  }
+  return id;
+}
+
+/**
+ * Resolves the salt used to pseudonymize identity (see src/export/pseudonymize.ts).
+ * An org-configured salt (same value on every teammate's machine) makes pseudonyms
+ * stable across machines; without one, we persist a random install-local salt so this
+ * one machine's pseudonym is at least stable across restarts — logged once as a warning
+ * since it silently limits cross-machine trend/leaderboard queries.
+ */
+async function resolveExportSalt(context: vscode.ExtensionContext, orgSalt: string): Promise<string> {
+  if (orgSalt.trim() !== '') return orgSalt;
+
+  let salt = context.globalState.get<string>(FALLBACK_SALT_KEY);
+  if (!salt) {
+    salt = randomBytes(32).toString('hex');
+    await context.globalState.update(FALLBACK_SALT_KEY, salt);
+    outputChannel?.appendLine(
+      '[export] No copilotTokenTracker.export.pseudonymSalt configured — using a random, ' +
+        'install-local salt. This keeps pseudonyms stable on THIS machine but means the ' +
+        'same person on a different machine will look like a different user. Configure a ' +
+        'shared org-wide salt to fix this.'
+    );
+  }
+  return salt;
+}
+
+/** Builds the sink + envelope once per activation (and once per Sync Now if settings changed), or clears both when export is disabled. */
+async function configureExport(context: vscode.ExtensionContext): Promise<void> {
+  const config = vscode.workspace.getConfiguration('copilotTokenTracker.export');
+  const enabled = config.get<boolean>('enabled', false);
+
+  if (!enabled) {
+    exportSink = undefined;
+    exportEnvelope = undefined;
+    return;
+  }
+
+  const endpoint = config.get<string>('endpoint', '');
+  if (!endpoint) {
+    outputChannel?.appendLine('[export] export.enabled is true but export.endpoint is empty — export disabled until it is set.');
+    exportSink = undefined;
+    exportEnvelope = undefined;
+    return;
+  }
+
+  const identityMode = config.get<'pseudonymous' | 'anonymous'>('identity', 'pseudonymous');
+  let userId: string | null = null;
+  if (identityMode === 'pseudonymous') {
+    const salt = await resolveExportSalt(context, config.get<string>('pseudonymSalt', ''));
+    const rawIdentity = await resolveRawIdentity();
+    userId = pseudonymizeIdentity(rawIdentity, salt);
+  }
+
+  exportEnvelope = {
+    orgId: config.get<string>('orgId', ''),
+    userId,
+    installationId: getOrCreateInstallationId(context),
+    extensionVersion: EXTENSION_VERSION
+  };
+  const authHeader = config.get<string>('authHeader', '');
+  exportSink = new HttpBatchSink(authHeader ? { endpoint, authHeader } : { endpoint });
+  outputChannel?.appendLine(`[export] configured: endpoint=${endpoint} identity=${identityMode} orgId=${exportEnvelope.orgId || '(unset)'}`);
 }
 
 function buildPayload(db: UsageDb, dbFound: boolean): DashboardPayload {
@@ -105,6 +187,20 @@ async function refresh(context: vscode.ExtensionContext): Promise<void> {
   );
 
   await persistDb(context, usageDb);
+
+  if (exportSink && exportEnvelope) {
+    try {
+      const outcome = await exportNewEvents(usageDb, exportSink, exportEnvelope);
+      if (!outcome.hadNothingNew) {
+        outputChannel?.appendLine(`[export] sent ${outcome.exportedCount} event(s)`);
+      }
+    } catch (err) {
+      // Deliberately does not rethrow: an export failure must never break local
+      // ingestion or the dashboard. The watermark wasn't advanced (see
+      // exportManager.ts), so the next cycle retries the same rows automatically.
+      outputChannel?.appendLine(`[export] failed, will retry next cycle: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 
   const payload = buildPayload(usageDb, true);
   updateStatusBar(payload);
@@ -193,7 +289,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.commands.registerCommand('copilotTokenTracker.refresh', () => refresh(context))
   );
+  context.subscriptions.push(
+    vscode.commands.registerCommand('copilotTokenTracker.syncNow', async () => {
+      await configureExport(context);
+      await refresh(context);
+      vscode.window.showInformationMessage(
+        exportSink ? 'Copilot Token Tracker: sync attempted — check the output channel for the result.' : 'Copilot Token Tracker: export is not enabled (see copilotTokenTracker.export.* settings).'
+      );
+    })
+  );
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('copilotTokenTracker.export')) {
+        void configureExport(context);
+      }
+    })
+  );
 
+  await configureExport(context);
   await refresh(context);
   refreshTimer = setInterval(() => void refresh(context), REFRESH_INTERVAL_MS);
   context.subscriptions.push({ dispose: () => clearInterval(refreshTimer) });

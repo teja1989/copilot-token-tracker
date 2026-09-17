@@ -9,8 +9,12 @@ phased roadmap — including a correction of an earlier wrong claim, worth readi
 **What exists now**: a real extension — status bar item, a "Copilot Token Tracker: Open
 Dashboard" command, a webview dashboard (stat cards + two Chart.js charts, by model and
 by agent), 30-second polling of `agent-traces.db` with incremental ingestion, and
-persistence to the extension's own storage so history survives a VS Code restart. It
-builds and packages cleanly: `npm run package` produces a 418 KB `.vsix`
+persistence to the extension's own storage so history survives a VS Code restart. An
+optional, off-by-default team-export path (`copilotTokenTracker.export.*` settings) can
+send pseudonymized usage metadata to a team-run collector — see
+[`docs/mongo-team-rollup.md`](./docs/mongo-team-rollup.md) for the schema, the identity
+model, and what's still unbuilt on that side (the wrapper API itself). It
+builds and packages cleanly: `npm run package` produces a ~423 KB `.vsix`
 (10 files — trimmed from an initial 9.17 MB by bundling `sql.js`'s JS directly and
 shipping only the one `.wasm` file it needs instead of that package's full ~23 MB of
 build variants).
@@ -169,8 +173,14 @@ purposes — the `.vsix` does not ship `dist/` at all (see `.vscodeignore`).
   `media/THIRD_PARTY_NOTICES.md` for its license).
 - `scripts/build-extension.mjs` — esbuild bundling for `extension.ts`; bundles `sql.js`'s
   JS directly (not left as an external `node_modules` dependency) and copies only the one
-  `.wasm` file actually needed, which is why the packaged `.vsix` is ~418 KB instead of
+  `.wasm` file actually needed, which is why the packaged `.vsix` is ~423 KB instead of
   the ~9 MB a naive `vsce package` produces when it includes all of `node_modules/sql.js`.
+- `src/export/` — the optional team-rollup path (off by default). `pseudonymize.ts` +
+  `identity.ts` turn a git email/OS username into a salted, non-reversible id;
+  `toExportDocument.ts` maps stored rows to the Mongo-shaped schema in
+  `docs/mongo-team-rollup.md`; `sink.ts` defines a swappable `ExportSink` (`HttpBatchSink`
+  is the concrete default, `NullSink` for tests); `exportManager.ts` orchestrates reading
+  unexported rows and only advancing the export watermark on success.
 
 ## Known open items
 

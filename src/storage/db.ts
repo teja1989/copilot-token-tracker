@@ -40,7 +40,17 @@ CREATE TABLE IF NOT EXISTS tool_call_events (
 
 CREATE INDEX IF NOT EXISTS idx_chat_events_ts ON chat_events(timestamp_ms);
 CREATE INDEX IF NOT EXISTS idx_tool_call_events_ts ON tool_call_events(timestamp_ms);
+
+-- Small key/value table for cross-restart state that isn't an aggregate, e.g. the
+-- team-export watermark (src/export/). Lives in the same sql.js DB so it persists for
+-- free via the existing exportBytes()/load() round trip — no separate file needed.
+CREATE TABLE IF NOT EXISTS export_state (
+  key TEXT PRIMARY KEY,
+  value INTEGER
+);
 `;
+
+const EXPORT_WATERMARK_KEY = 'last_exported_ms';
 
 export interface ModelAggregate {
   model: string;
@@ -59,11 +69,68 @@ export interface AgentAggregate {
   toolErrorCount: number;
 }
 
+/**
+ * A stored chat_events row, raw (not aggregated) — what team export sends one document
+ * per row of, unlike the aggregate queries above. Includes the cost fields exactly as
+ * already computed by insertChatEvent()/estimateEventCost(), so export never recomputes
+ * pricing — see docs/mongo-team-rollup.md.
+ */
+export interface StoredChatEvent {
+  spanId: string;
+  conversationId: string;
+  chatSessionId: string | null;
+  turnIndex: number | null;
+  timestampMs: number;
+  provider: string | null;
+  requestedModel: string | null;
+  resolvedModel: string | null;
+  agentName: string | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cachedTokens: number | null;
+  cacheWriteTokens: number | null;
+  reasoningTokens: number | null;
+  timeToFirstTokenMs: number | null;
+  usdCost: number | null;
+  premiumRequestUnits: number | null;
+  costSource: string | null;
+}
+
+export interface StoredToolCallEvent {
+  spanId: string;
+  conversationId: string;
+  chatSessionId: string | null;
+  turnIndex: number | null;
+  timestampMs: number;
+  agentName: string | null;
+  toolName: string | null;
+  toolType: string | null;
+  toolCallId: string | null;
+  errorType: string | null;
+  durationMs: number | null;
+}
+
+function toNullableNumber(v: unknown): number | null {
+  return v == null ? null : Number(v);
+}
+function toNullableString(v: unknown): string | null {
+  return v == null ? null : String(v);
+}
+
 function execToObjects(db: Database, sql: string): Record<string, unknown>[] {
   const results = db.exec(sql);
   if (results.length === 0) return [];
   const { columns, values } = results[0]!;
   return values.map((row) => Object.fromEntries(columns.map((col, i) => [col, row[i]])));
+}
+
+function queryToObjects(db: Database, sql: string, params: (string | number | null)[]): Record<string, unknown>[] {
+  const stmt = db.prepare(sql);
+  if (params.length > 0) stmt.bind(params);
+  const rows: Record<string, unknown>[] = [];
+  while (stmt.step()) rows.push(stmt.getAsObject());
+  stmt.free();
+  return rows;
 }
 
 export class UsageDb {
@@ -109,6 +176,82 @@ export class UsageDb {
     );
     const value = rows[0]?.['latest'];
     return value == null ? null : Number(value);
+  }
+
+  /**
+   * The team-export watermark: distinct from getLatestTimestampMs() above on purpose.
+   * That one tracks "have we read this span from agent-traces.db yet"; this one tracks
+   * "have we successfully sent this span to the team API yet". They must be independent
+   * — an export failure (API down) must never block local ingestion, and must never
+   * cause a span to be silently skipped for export just because local ingestion has
+   * already moved past it. See src/export/exportManager.ts.
+   */
+  getExportWatermarkMs(): number | null {
+    const rows = queryToObjects(this.db, 'SELECT value FROM export_state WHERE key = ?', [EXPORT_WATERMARK_KEY]);
+    return toNullableNumber(rows[0]?.['value']);
+  }
+
+  setExportWatermarkMs(value: number): void {
+    this.db.run(`INSERT OR REPLACE INTO export_state (key, value) VALUES (?, ?)`, [EXPORT_WATERMARK_KEY, value]);
+  }
+
+  /** Raw (non-aggregated) chat event rows newer than `sinceMs`, oldest first, for team export. */
+  getChatEventsSince(sinceMs: number | null): StoredChatEvent[] {
+    const clause = sinceMs != null ? 'WHERE timestamp_ms > ?' : '';
+    const rows = queryToObjects(
+      this.db,
+      `SELECT span_id, conversation_id, chat_session_id, turn_index, timestamp_ms, provider,
+              requested_model, resolved_model, agent_name, input_tokens, output_tokens,
+              cached_tokens, cache_write_tokens, reasoning_tokens, time_to_first_token_ms,
+              usd_cost, premium_request_units, cost_source
+       FROM chat_events ${clause} ORDER BY timestamp_ms ASC`,
+      sinceMs != null ? [sinceMs] : []
+    );
+    return rows.map((r) => ({
+      spanId: String(r['span_id']),
+      conversationId: String(r['conversation_id']),
+      chatSessionId: toNullableString(r['chat_session_id']),
+      turnIndex: toNullableNumber(r['turn_index']),
+      timestampMs: Number(r['timestamp_ms']),
+      provider: toNullableString(r['provider']),
+      requestedModel: toNullableString(r['requested_model']),
+      resolvedModel: toNullableString(r['resolved_model']),
+      agentName: toNullableString(r['agent_name']),
+      inputTokens: toNullableNumber(r['input_tokens']),
+      outputTokens: toNullableNumber(r['output_tokens']),
+      cachedTokens: toNullableNumber(r['cached_tokens']),
+      cacheWriteTokens: toNullableNumber(r['cache_write_tokens']),
+      reasoningTokens: toNullableNumber(r['reasoning_tokens']),
+      timeToFirstTokenMs: toNullableNumber(r['time_to_first_token_ms']),
+      usdCost: toNullableNumber(r['usd_cost']),
+      premiumRequestUnits: toNullableNumber(r['premium_request_units']),
+      costSource: toNullableString(r['cost_source'])
+    }));
+  }
+
+  /** Raw (non-aggregated) tool-call event rows newer than `sinceMs`, oldest first, for team export. */
+  getToolCallEventsSince(sinceMs: number | null): StoredToolCallEvent[] {
+    const clause = sinceMs != null ? 'WHERE timestamp_ms > ?' : '';
+    const rows = queryToObjects(
+      this.db,
+      `SELECT span_id, conversation_id, chat_session_id, turn_index, timestamp_ms, agent_name,
+              tool_name, tool_type, tool_call_id, error_type, duration_ms
+       FROM tool_call_events ${clause} ORDER BY timestamp_ms ASC`,
+      sinceMs != null ? [sinceMs] : []
+    );
+    return rows.map((r) => ({
+      spanId: String(r['span_id']),
+      conversationId: String(r['conversation_id']),
+      chatSessionId: toNullableString(r['chat_session_id']),
+      turnIndex: toNullableNumber(r['turn_index']),
+      timestampMs: Number(r['timestamp_ms']),
+      agentName: toNullableString(r['agent_name']),
+      toolName: toNullableString(r['tool_name']),
+      toolType: toNullableString(r['tool_type']),
+      toolCallId: toNullableString(r['tool_call_id']),
+      errorType: toNullableString(r['error_type']),
+      durationMs: toNullableNumber(r['duration_ms'])
+    }));
   }
 
   insertChatEvent(event: ChatEvent): void {

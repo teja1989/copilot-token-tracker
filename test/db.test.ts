@@ -108,4 +108,38 @@ describe('UsageDb', () => {
     expect(db.getLatestTimestampMs()).toBeNull();
     db.close();
   });
+
+  it('returns raw chat/tool-call rows since a watermark, oldest first, with cost fields included', async () => {
+    const db = await UsageDb.create();
+    db.insertChatEvent(chatEvent({ spanId: 'span-1', timestampMs: 1000, resolvedModel: 'gpt-4o-2024-08-06' }));
+    db.insertChatEvent(chatEvent({ spanId: 'span-2', timestampMs: 2000, resolvedModel: 'claude-sonnet-4-6-20260201' }));
+    db.insertToolCallEvent(toolCallEvent({ spanId: 'tool-1', timestampMs: 1500 }));
+
+    const allChats = db.getChatEventsSince(null);
+    expect(allChats.map((r) => r.spanId)).toEqual(['span-1', 'span-2']);
+    expect(allChats[1]?.premiumRequestUnits).toBe(9);
+
+    const sinceChats = db.getChatEventsSince(1000);
+    expect(sinceChats.map((r) => r.spanId)).toEqual(['span-2']);
+
+    const allTools = db.getToolCallEventsSince(null);
+    expect(allTools.map((r) => r.spanId)).toEqual(['tool-1']);
+
+    db.close();
+  });
+
+  it('tracks the export watermark independently of the local ingestion watermark', async () => {
+    const db = await UsageDb.create();
+    db.insertChatEvent(chatEvent({ spanId: 'span-1', timestampMs: 5000 }));
+
+    expect(db.getExportWatermarkMs()).toBeNull();
+    expect(db.getLatestTimestampMs()).toBe(5000);
+
+    db.setExportWatermarkMs(3000);
+    expect(db.getExportWatermarkMs()).toBe(3000);
+    // Local ingestion watermark is unaffected by the export watermark.
+    expect(db.getLatestTimestampMs()).toBe(5000);
+
+    db.close();
+  });
 });
