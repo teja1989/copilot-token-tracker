@@ -200,38 +200,71 @@ export function createApp({ store, collector, webDistDir }: ServerDeps): Express
     res.json({ ok: true, removed });
   });
 
+  // Track active SSE streams and cap to 3 so HTTP/1.1 browsers (6-socket limit per origin)
+  // ALWAYS retain free sockets for page refreshes, assets, and API calls.
+  const activeSseClients = new Set<Response>();
+  const MAX_SSE_CLIENTS = 3;
+
   // Real-time SSE stream for live dashboard updates
   app.get('/api/stream', (req: Request, res: Response) => {
+    while (activeSseClients.size >= MAX_SSE_CLIENTS) {
+      const oldest = activeSseClients.values().next().value;
+      if (!oldest) break;
+      activeSseClients.delete(oldest);
+      try {
+        oldest.end();
+      } catch {
+        // ignore
+      }
+    }
+
     res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders?.();
+    activeSseClients.add(res);
 
     res.write(`event: connected\ndata: ${JSON.stringify({ ts: Date.now() })}\n\n`);
 
     const unsubscribe = store.subscribe((added) => {
+      if (res.writableEnded) return;
       res.write(`event: update\ndata: ${JSON.stringify({ count: added.length, ts: Date.now() })}\n\n`);
     });
 
     const keepAlive = setInterval(() => {
+      if (res.writableEnded) return;
       res.write(`: ping\n\n`);
     }, 20_000);
 
-    req.on('close', () => {
+    const cleanup = () => {
       clearInterval(keepAlive);
       unsubscribe();
-    });
+      activeSseClients.delete(res);
+    };
+
+    req.on('close', cleanup);
+    res.on('close', cleanup);
   });
 
   // Serve built React dashboard when available
   const resolvedWebDist = webDistDir ?? join(__dirname, '..', 'web', 'dist');
   if (existsSync(resolvedWebDist)) {
-    app.use(express.static(resolvedWebDist));
+    app.use(
+      express.static(resolvedWebDist, {
+        setHeaders(res, filePath) {
+          if (filePath.endsWith('index.html')) {
+            res.setHeader('Cache-Control', 'no-store');
+          }
+        },
+      }),
+    );
     app.get('/{*splat}', (req: Request, res: Response, next) => {
       if (req.path.startsWith('/api/') || req.path.startsWith('/v1/')) {
         next();
         return;
       }
+      res.setHeader('Cache-Control', 'no-store');
       res.sendFile(join(resolvedWebDist, 'index.html'));
     });
   }

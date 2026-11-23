@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Download,
   GitBranch,
@@ -134,15 +134,62 @@ export default function App() {
     };
   }, [selectedWorkflowId, metrics?.generatedAtMs]);
 
+  const loadAllRef = useRef(loadAll);
   useEffect(() => {
-    const es = new EventSource('/api/stream');
-    es.addEventListener('connected', () => setSseConnected(true));
-    es.addEventListener('update', () => {
-      void loadAll();
-    });
-    es.onerror = () => setSseConnected(false);
-    return () => es.close();
+    loadAllRef.current = loadAll;
   }, [loadAll]);
+
+  useEffect(() => {
+    let es: EventSource | null = null;
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const connect = () => {
+      if (es || document.visibilityState === 'hidden') return;
+      es = new EventSource('/api/stream');
+      es.addEventListener('connected', () => setSseConnected(true));
+      es.addEventListener('update', () => {
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+          debounceTimer = null;
+          void loadAllRef.current();
+        }, 500);
+      });
+      es.onerror = () => setSseConnected(false);
+    };
+
+    const disconnect = () => {
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+        debounceTimer = null;
+      }
+      if (es) {
+        es.close();
+        es = null;
+      }
+      setSseConnected(false);
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        disconnect();
+      } else {
+        void loadAllRef.current();
+        connect();
+      }
+    };
+
+    connect();
+    window.addEventListener('beforeunload', disconnect);
+    window.addEventListener('pagehide', disconnect);
+    document.addEventListener('visibilitychange', onVisibility);
+
+    return () => {
+      window.removeEventListener('beforeunload', disconnect);
+      window.removeEventListener('pagehide', disconnect);
+      document.removeEventListener('visibilitychange', onVisibility);
+      disconnect();
+    };
+  }, []);
 
   const handleScan = async () => {
     setScanning(true);
