@@ -1,6 +1,11 @@
 node_modules/
 dist/
-dist-ext/
+web/dist/
+web/node_modules/
+.agentpulse/
+*.db
+*.db-journal
 *.vsix
-*.log
 .DS_Store
+*.log
+coverage/

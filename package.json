@@ -1,94 +1,55 @@
 {
-  "name": "copilot-token-tracker",
-  "displayName": "Copilot Token Tracker",
-  "description": "Local-first Copilot Chat/Agent usage, token, and cost dashboard",
-  "version": "0.1.0",
-  "publisher": "local-team",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/teja1989/copilot-token-tracker"
-  },
-  "engines": {
-    "vscode": "^1.85.0",
-    "node": ">=18"
-  },
-  "categories": ["Other"],
+  "name": "agentpulse",
+  "version": "1.0.0",
+  "description": "Local-first multi-model token usage tracker and multi-agent collaboration observatory",
   "type": "module",
-  "main": "./dist-ext/extension.cjs",
-  "activationEvents": ["onStartupFinished"],
-  "contributes": {
-    "commands": [
-      {
-        "command": "copilotTokenTracker.openDashboard",
-        "title": "Copilot Token Tracker: Open Dashboard"
-      },
-      {
-        "command": "copilotTokenTracker.refresh",
-        "title": "Copilot Token Tracker: Refresh Now"
-      },
-      {
-        "command": "copilotTokenTracker.syncNow",
-        "title": "Copilot Token Tracker: Sync to Team Now"
-      }
-    ],
-    "configuration": {
-      "title": "Copilot Token Tracker",
-      "properties": {
-        "copilotTokenTracker.export.enabled": {
-          "type": "boolean",
-          "default": false,
-          "description": "Send usage metadata to your team's collector. Off by default — nothing leaves this machine unless you turn this on and set an endpoint."
-        },
-        "copilotTokenTracker.export.endpoint": {
-          "type": "string",
-          "default": "",
-          "description": "Your team's ingestion API URL. Required for export to do anything even when enabled."
-        },
-        "copilotTokenTracker.export.authHeader": {
-          "type": "string",
-          "default": "",
-          "description": "Full Authorization header value sent with each export request, e.g. \"Bearer <token>\". Left empty, no auth header is sent."
-        },
-        "copilotTokenTracker.export.orgId": {
-          "type": "string",
-          "default": "",
-          "description": "A static org/team identifier included on every exported document."
-        },
-        "copilotTokenTracker.export.identity": {
-          "type": "string",
-          "enum": ["pseudonymous", "anonymous"],
-          "default": "pseudonymous",
-          "description": "\"pseudonymous\" tags exports with a salted hash of your git email (or OS username as fallback) so per-person trends work without exporting your real identity. \"anonymous\" sends no user identifier at all."
-        },
-        "copilotTokenTracker.export.pseudonymSalt": {
-          "type": "string",
-          "default": "",
-          "description": "Shared org-wide secret for pseudonymization. Must be the SAME value on every teammate's machine for cross-machine trends to work — ask whoever runs your team's collector for this value. Left empty, each machine falls back to its own random salt (stable per-machine, but the same person looks like a different user on each machine)."
-        }
-      }
-    }
+  "bin": {
+    "agentpulse": "./dist/cli.js"
   },
+  "files": [
+    "dist",
+    "web/dist",
+    "scripts/launch.mjs",
+    "start.command",
+    "start.bat",
+    "README.md"
+  ],
+  "keywords": [
+    "copilot",
+    "tokens",
+    "multi-agent",
+    "telemetry",
+    "opentelemetry",
+    "observability"
+  ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "setup": "npm install && npm --prefix web install && npm run build",
+    "build:server": "tsc -p tsconfig.json",
+    "build:web": "npm --prefix web run build",
+    "build": "npm run build:server && npm run build:web",
+    "dev:server": "tsx watch src/cli.ts start --no-open",
+    "dev:web": "npm --prefix web run dev",
+    "launch": "node scripts/launch.mjs",
+    "start": "node dist/cli.js start",
+    "typecheck": "tsc --noEmit && npm --prefix web run typecheck",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
-    "inspect:traces": "npm run build && node tools/inspect-traces-db.mjs",
-    "vscode:prepublish": "node scripts/build-extension.mjs",
-    "build:ext": "node scripts/build-extension.mjs",
-    "package": "npm run build:ext && npx @vscode/vsce package --no-yarn"
+    "test:watch": "vitest"
   },
   "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
     "sql.js": "^1.13.0"
   },
   "devDependencies": {
-    "@types/node": "^22.10.0",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.1",
+    "@types/node": "^22.15.0",
     "@types/sql.js": "^1.4.9",
-    "@types/vscode": "^1.85.0",
-    "@vscode/vsce": "^3.2.1",
-    "chart.js": "^4.4.7",
-    "esbuild": "^0.28.0",
-    "typescript": "^5.7.2",
-    "vitest": "^5.0.1"
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.3"
+  },
+  "engines": {
+    "node": ">=20.0.0"
   }
 }
