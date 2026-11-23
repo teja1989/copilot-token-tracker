@@ -1,0 +1,13 @@
+{
+  "vscodeDirs": [
+    "~/Library/Application Support/Code",
+    "C:/Users/YOUR_USER/AppData/Roaming/Code"
+  ],
+  "copilotTraceDbs": [],
+  "copilotChatLogDirs": [],
+  "claudeDirs": [],
+  "antigravityDirs": [],
+  "codexDirs": [],
+  "port": 4318,
+  "pollIntervalMs": 10000
+}

@@ -1,8 +1,10 @@
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { loadAgentPulseConfig, type AgentPulseConfig } from '../config/loadConfig.js';
 
 export interface DiscoveredPaths {
+  configFilesLoaded: string[];
   vscodeRootDirs: string[];
   copilotTracesDbs: string[];
   copilotChatSessions: string[];
@@ -14,8 +16,8 @@ export interface DiscoveredPaths {
 
 const VSCODE_VARIANTS = ['Code', 'Code - Insiders', 'VSCodium', 'Cursor', 'Windsurf'];
 
-export function getVsCodeRootDirs(home: string): string[] {
-  const dirs: string[] = [];
+export function getVsCodeRootDirs(home: string, extraDirs: string[] = []): string[] {
+  const dirs: string[] = [...extraDirs];
 
   // Optional custom override for corporate/portable VS Code installs
   const envOverride = process.env.AGENTPULSE_VSCODE_DIR || process.env.VSCODE_USER_DATA_DIR;
@@ -79,13 +81,32 @@ function collectFiles(
   return results;
 }
 
-export function discoverLocalSources(customHome?: string): DiscoveredPaths {
+export function discoverLocalSources(
+  customHome?: string,
+  overrideConfig?: Partial<AgentPulseConfig>,
+): DiscoveredPaths {
   const home = customHome ?? homedir();
-  const vscodeRootDirs = getVsCodeRootDirs(home);
+  const loaded = loadAgentPulseConfig({ homeDir: home });
+  const cfg: AgentPulseConfig = {
+    vscodeDirs: [...loaded.config.vscodeDirs, ...(overrideConfig?.vscodeDirs ?? [])],
+    copilotTraceDbs: [...loaded.config.copilotTraceDbs, ...(overrideConfig?.copilotTraceDbs ?? [])],
+    copilotChatLogDirs: [...loaded.config.copilotChatLogDirs, ...(overrideConfig?.copilotChatLogDirs ?? [])],
+    claudeDirs: [...loaded.config.claudeDirs, ...(overrideConfig?.claudeDirs ?? [])],
+    antigravityDirs: [...loaded.config.antigravityDirs, ...(overrideConfig?.antigravityDirs ?? [])],
+    codexDirs: [...loaded.config.codexDirs, ...(overrideConfig?.codexDirs ?? [])],
+  };
 
-  const copilotTracesDbs: string[] = [];
+  const vscodeRootDirs = getVsCodeRootDirs(home, cfg.vscodeDirs);
+
+  const copilotTracesDbs: string[] = cfg.copilotTraceDbs.filter((p) => existsSync(p));
   const copilotChatSessions: string[] = [];
   const copilotChatLogs: string[] = [];
+
+  for (const extraLogDir of cfg.copilotChatLogDirs) {
+    if (!existsSync(extraLogDir)) continue;
+    copilotChatLogs.push(...collectFiles(extraLogDir, (_p, n) => n === 'GitHub Copilot Chat.log' || n.endsWith('.log'), 4));
+    copilotChatSessions.push(...collectFiles(extraLogDir, (_p, n) => n.endsWith('.json') || n.endsWith('.jsonl'), 3));
+  }
 
   for (const rootDir of vscodeRootDirs) {
     // Support both rootDir = .../Code and rootDir = .../Code/User
@@ -149,28 +170,23 @@ export function discoverLocalSources(customHome?: string): DiscoveredPaths {
     );
   }
 
-  const claudeProjectsDir = join(home, '.claude', 'projects');
-  const claudeCodeJsonls = collectFiles(
-    claudeProjectsDir,
-    (_p, n) => n.endsWith('.jsonl'),
-    5,
+  const claudeRoots = [join(home, '.claude', 'projects'), ...cfg.claudeDirs];
+  const claudeCodeJsonls = claudeRoots.flatMap((dir) =>
+    collectFiles(dir, (_p, n) => n.endsWith('.jsonl'), 5),
   );
 
-  const antigravityBrainDir = join(home, '.gemini', 'antigravity', 'brain');
-  const antigravityTranscripts = collectFiles(
-    antigravityBrainDir,
-    (_p, n) => n === 'transcript.jsonl',
-    3,
+  const antigravityRoots = [join(home, '.gemini', 'antigravity', 'brain'), ...cfg.antigravityDirs];
+  const antigravityTranscripts = antigravityRoots.flatMap((dir) =>
+    collectFiles(dir, (_p, n) => n === 'transcript.jsonl', 3),
   );
 
-  const codexDir = join(home, '.codex', 'sessions');
-  const codexJsonls = collectFiles(
-    codexDir,
-    (_p, n) => n.endsWith('.jsonl'),
-    4,
+  const codexRoots = [join(home, '.codex', 'sessions'), ...cfg.codexDirs];
+  const codexJsonls = codexRoots.flatMap((dir) =>
+    collectFiles(dir, (_p, n) => n.endsWith('.jsonl'), 4),
   );
 
   return {
+    configFilesLoaded: loaded.loadedFrom,
     vscodeRootDirs,
     copilotTracesDbs: Array.from(new Set(copilotTracesDbs)),
     copilotChatSessions: Array.from(new Set(copilotChatSessions)),

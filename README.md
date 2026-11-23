@@ -93,6 +93,20 @@ curl -X POST http://127.0.0.1:4318/api/ingest \
 
 ---
 
+### Custom Local Paths Configuration
+If your work laptop stores VS Code, Copilot, Claude, or Codex logs in a non-default directory, copy [`agentpulse.config.example.json`](./agentpulse.config.example.json) to `agentpulse.config.json` (or `~/.agentpulse/config.json`) — or choose **Option 5 (Configure Custom Local Path)** in `start.command` / `start.bat`:
+
+```json
+{
+  "vscodeDirs": ["C:/Users/YOUR_USER/AppData/Roaming/Code"],
+  "copilotChatLogDirs": [],
+  "claudeDirs": [],
+  "codexDirs": []
+}
+```
+
+---
+
 ## Development & Testing
 
 ```bash

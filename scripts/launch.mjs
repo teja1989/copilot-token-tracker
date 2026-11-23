@@ -148,10 +148,11 @@ async function main() {
       console.log(`  ${C.cyan}2)${C.reset} ${C.bold}Launch Observatory + Demo Swarms${C.reset} ${C.dim}(Pre-load simulated multi-agent workflows)${C.reset}`);
       console.log(`  ${C.cyan}3)${C.reset} Custom Port / Options`);
       console.log(`  ${C.cyan}4)${C.reset} Run Local Diagnostics & Tests`);
-      console.log(`  ${C.cyan}5)${C.reset} Reinstall & Rebuild`);
-      console.log(`  ${C.cyan}6)${C.reset} Exit\n`);
+      console.log(`  ${C.cyan}5)${C.reset} Configure Custom Local Path ${C.dim}(VS Code / Copilot / Claude / Codex)${C.reset}`);
+      console.log(`  ${C.cyan}6)${C.reset} Reinstall & Rebuild`);
+      console.log(`  ${C.cyan}7)${C.reset} Exit\n`);
 
-      const choice = (await rl.question(`${C.yellow}Select [1-6] (default 1): ${C.reset}`)).trim() || '1';
+      const choice = (await rl.question(`${C.yellow}Select [1-7] (default 1): ${C.reset}`)).trim() || '1';
 
       if (choice === '1') {
         rl.pause();
@@ -177,13 +178,39 @@ async function main() {
         await runDiagnostics();
         await rl.question(`${C.dim}Press Enter to return to menu...${C.reset}`);
       } else if (choice === '5') {
+        if (ensureInstalledAndBuilt(false)) {
+          const { saveGlobalConfig, getGlobalConfigPath } = await import(
+            join(ROOT, 'dist', 'config', 'loadConfig.js')
+          );
+          console.log(`\n${C.bold}Add a custom directory to ${getGlobalConfigPath()}${C.reset}`);
+          console.log(`  1) VS Code / Cursor / VSCodium data dir (e.g. C:\\Users\\you\\AppData\\Roaming\\Code)`);
+          console.log(`  2) Copilot logs or chatSessions directory`);
+          console.log(`  3) Claude Code projects directory`);
+          console.log(`  4) Codex sessions directory`);
+          const kind = (await rl.question('Choose type [1-4]: ')).trim();
+          const dir = (await rl.question('Paste full folder path: ')).trim();
+          if (dir) {
+            const patch =
+              kind === '2'
+                ? { copilotChatLogDirs: [dir] }
+                : kind === '3'
+                  ? { claudeDirs: [dir] }
+                  : kind === '4'
+                    ? { codexDirs: [dir] }
+                    : { vscodeDirs: [dir] };
+            const saved = saveGlobalConfig(patch);
+            console.log(`${C.green}✓ Saved custom path to ${saved}${C.reset}\n`);
+          }
+        }
+        await rl.question(`${C.dim}Press Enter to return to menu...${C.reset}`);
+      } else if (choice === '6') {
         ensureInstalledAndBuilt(true);
         await rl.question(`${C.dim}Press Enter to return to menu...${C.reset}`);
-      } else if (choice === '6' || choice.toLowerCase() === 'q') {
+      } else if (choice === '7' || choice.toLowerCase() === 'q') {
         console.log(`\n${C.cyan}Goodbye!${C.reset}\n`);
         break;
       } else {
-        console.log(`${C.yellow}Invalid choice. Please enter 1-6.${C.reset}`);
+        console.log(`${C.yellow}Invalid choice. Please enter 1-7.${C.reset}`);
         await new Promise((r) => setTimeout(r, 900));
       }
     }
