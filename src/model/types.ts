@@ -203,6 +203,8 @@ export interface EfficiencyInsight {
   title: string;
   description: string;
   recommendation: string;
+  evidence?: string;
+  recoverableTokens?: number;
   estimatedMonthlySavingsUsd?: number;
   affectedModels?: string[];
   affectedAgents?: string[];
