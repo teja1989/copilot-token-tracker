@@ -166,6 +166,18 @@ export interface SourceUsageSummary {
   lastSeenMs: number;
 }
 
+export interface ProjectUsageSummary {
+  project: string;
+  workflows: number;
+  requests: number;
+  agents: number;
+  totalTokens: number;
+  cachedReadTokens: number;
+  cacheHitRate: number;
+  estimatedCostUsd: number;
+  lastSeenMs: number;
+}
+
 export interface EfficiencyInsight {
   id: string;
   severity: 'high' | 'medium' | 'low' | 'positive';
@@ -211,6 +223,7 @@ export interface DashboardMetrics {
   timeSeries: TimeSeriesBucket[];
   byModel: ModelUsageSummary[];
   bySource: SourceUsageSummary[];
+  byProject: ProjectUsageSummary[];
   topTools: Array<{ toolName: string; calls: number; errors: number; avgDurationMs: number; totalTokens: number }>;
   insights: EfficiencyInsight[];
   sources: DiscoveredSourceStatus[];

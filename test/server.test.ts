@@ -63,8 +63,18 @@ describe('AgentPulse HTTP Server API', () => {
     // Fetch metrics
     const metrics = (await fetch(`${baseUrl}/api/metrics`).then((r) => r.json())) as {
       kpis: { totalRequests: number; totalTokens: number };
+      byProject: Array<{ project: string; totalTokens: number }>;
     };
     expect(metrics.kpis.totalRequests).toBe(1 + simJson.eventCount);
+    expect(metrics.byProject.length).toBeGreaterThanOrEqual(2);
+
+    // Fetch config endpoint
+    const cfg = (await fetch(`${baseUrl}/api/config`).then((r) => r.json())) as {
+      config: { vscodeDirs: string[] };
+      globalConfigPath: string;
+    };
+    expect(Array.isArray(cfg.config.vscodeDirs)).toBe(true);
+    expect(cfg.globalConfigPath).toContain('.agentpulse');
 
     // Fetch export snapshot
     const exp = (await fetch(`${baseUrl}/api/export`).then((r) => r.json())) as {

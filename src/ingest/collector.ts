@@ -1,4 +1,7 @@
-import { readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, watch, type FSWatcher } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { loadAgentPulseConfig } from '../config/loadConfig.js';
 import type { DiscoveredSourceStatus, SourceKind } from '../model/types.js';
 import type { TelemetryStore } from '../store/telemetryStore.js';
 import {
@@ -14,7 +17,7 @@ import {
   readCopilotChatSessionFile,
   readCopilotTracesDb,
 } from './copilot.js';
-import { discoverLocalSources } from './discovery.js';
+import { discoverLocalSources, getVsCodeRootDirs } from './discovery.js';
 
 export class LocalCollector {
   private store: TelemetryStore;
@@ -22,6 +25,8 @@ export class LocalCollector {
   private fileMtimes = new Map<string, number>();
   private sourceStatuses = new Map<SourceKind, DiscoveredSourceStatus>();
   private timer: NodeJS.Timeout | null = null;
+  private watchers: FSWatcher[] = [];
+  private watchDebounceTimer: NodeJS.Timeout | null = null;
   private scanning = false;
 
   constructor(store: TelemetryStore, options?: { homeDir?: string }) {
@@ -192,9 +197,101 @@ export class LocalCollector {
     return { added: totalAdded, scannedFiles };
   }
 
+  private collectWatchDirs(): string[] {
+    const home = this.customHome ?? homedir();
+    const { config: cfg } = loadAgentPulseConfig({ homeDir: home });
+    const candidateDirs = new Set<string>([
+      join(home, '.claude', 'projects'),
+      join(home, '.gemini', 'antigravity', 'brain'),
+      join(home, '.codex', 'sessions'),
+      join(home, '.copilot'),
+      ...cfg.claudeDirs,
+      ...cfg.antigravityDirs,
+      ...cfg.codexDirs,
+      ...cfg.copilotChatLogDirs,
+    ]);
+
+    for (const dbPath of cfg.copilotTraceDbs) {
+      candidateDirs.add(dirname(dbPath));
+    }
+
+    const vscodeRootDirs = getVsCodeRootDirs(home, cfg.vscodeDirs);
+    for (const rootDir of vscodeRootDirs) {
+      const userDir = existsSync(join(rootDir, 'User')) ? join(rootDir, 'User') : rootDir;
+      candidateDirs.add(join(userDir, 'globalStorage', 'github.copilot-chat'));
+      candidateDirs.add(join(userDir, 'globalStorage', 'emptyWindowChatSessions'));
+      candidateDirs.add(join(userDir, 'workspaceStorage'));
+      candidateDirs.add(join(rootDir, 'logs'));
+    }
+
+    const existingDirs: string[] = [];
+    for (const dir of candidateDirs) {
+      try {
+        if (existsSync(dir) && statSync(dir).isDirectory()) {
+          existingDirs.push(dir);
+        }
+      } catch {
+        // Skip unreadable or non-directory paths
+      }
+    }
+    return existingDirs;
+  }
+
+  private scheduleDebouncedScan(): void {
+    if (this.watchDebounceTimer) {
+      clearTimeout(this.watchDebounceTimer);
+    }
+    this.watchDebounceTimer = setTimeout(() => {
+      this.watchDebounceTimer = null;
+      void this.scanOnce(false);
+    }, 350);
+    if (typeof this.watchDebounceTimer.unref === 'function') {
+      this.watchDebounceTimer.unref();
+    }
+  }
+
+  public startWatching(): void {
+    this.stopWatching();
+    const recursive = process.platform === 'darwin' || process.platform === 'win32';
+    const dirs = this.collectWatchDirs();
+
+    for (const dir of dirs) {
+      try {
+        const watcher = watch(dir, { recursive }, () => {
+          this.scheduleDebouncedScan();
+        });
+        watcher.on('error', () => {
+          // Silently ignore watcher errors and rely on periodic polling
+        });
+        if (typeof watcher.unref === 'function') {
+          watcher.unref();
+        }
+        this.watchers.push(watcher);
+      } catch {
+        // Silently fall back to polling on Linux or permission errors
+      }
+    }
+  }
+
+  public stopWatching(): void {
+    if (this.watchDebounceTimer) {
+      clearTimeout(this.watchDebounceTimer);
+      this.watchDebounceTimer = null;
+    }
+    for (const watcher of this.watchers) {
+      try {
+        watcher.close();
+      } catch {
+        // Ignore close errors during shutdown
+      }
+    }
+    this.watchers = [];
+  }
+
   public startPolling(intervalMs = 10_000): void {
     if (this.timer) return;
     void this.scanOnce(true);
+    this.startWatching();
     this.timer = setInterval(() => {
       void this.scanOnce(false);
     }, intervalMs);
@@ -204,6 +301,7 @@ export class LocalCollector {
   }
 
   public stopPolling(): void {
+    this.stopWatching();
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;

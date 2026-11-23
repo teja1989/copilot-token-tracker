@@ -111,6 +111,13 @@ export function loadAgentPulseConfig(options?: {
   };
 }
 
+export function replaceGlobalConfig(config: AgentPulseConfig, customHome?: string): string {
+  const path = getGlobalConfigPath(customHome);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(config, null, 2) + '\n', 'utf8');
+  return path;
+}
+
 export function saveGlobalConfig(config: Partial<AgentPulseConfig>, customHome?: string): string {
   const path = getGlobalConfigPath(customHome);
   mkdirSync(dirname(path), { recursive: true });

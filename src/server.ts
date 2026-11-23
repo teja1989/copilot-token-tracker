@@ -6,6 +6,12 @@ import cors from 'cors';
 import express, { type Express, type Request, type Response } from 'express';
 import { buildWorkflowGraph, buildWorkflowSummaries } from './analytics/agentGraph.js';
 import { computeDashboardMetrics } from './analytics/metrics.js';
+import {
+  getGlobalConfigPath,
+  loadAgentPulseConfig,
+  replaceGlobalConfig,
+  type AgentPulseConfig,
+} from './config/loadConfig.js';
 import type { LocalCollector } from './ingest/collector.js';
 import { normalizeSimpleIngest, parseOtlpTraces, type SimpleIngestEvent } from './ingest/otlp.js';
 import type { QueryFilter, SourceKind } from './model/types.js';
@@ -122,6 +128,38 @@ export function createApp({ store, collector, webDistDir }: ServerDeps): Express
   app.post('/api/scan', async (_req: Request, res: Response) => {
     const result = await collector.scanOnce(true);
     res.json({ ok: true, ...result, sources: collector.getSourceStatuses() });
+  });
+
+  app.get('/api/config', (_req: Request, res: Response) => {
+    const loaded = loadAgentPulseConfig();
+    res.json({
+      config: loaded.config,
+      loadedFrom: loaded.loadedFrom,
+      globalConfigPath: getGlobalConfigPath(),
+    });
+  });
+
+  app.put('/api/config', (req: Request, res: Response) => {
+    const incoming = (req.body?.config ?? req.body) as Partial<AgentPulseConfig> | undefined;
+    if (!incoming || typeof incoming !== 'object') {
+      res.status(400).json({ error: 'Expected config object' });
+      return;
+    }
+    // Overwrite lists cleanly (replace existing arrays rather than only appending)
+    const path = getGlobalConfigPath();
+    const loaded = loadAgentPulseConfig();
+    const next: AgentPulseConfig = {
+      vscodeDirs: Array.isArray(incoming.vscodeDirs) ? incoming.vscodeDirs : loaded.config.vscodeDirs,
+      copilotTraceDbs: Array.isArray(incoming.copilotTraceDbs) ? incoming.copilotTraceDbs : loaded.config.copilotTraceDbs,
+      copilotChatLogDirs: Array.isArray(incoming.copilotChatLogDirs) ? incoming.copilotChatLogDirs : loaded.config.copilotChatLogDirs,
+      claudeDirs: Array.isArray(incoming.claudeDirs) ? incoming.claudeDirs : loaded.config.claudeDirs,
+      antigravityDirs: Array.isArray(incoming.antigravityDirs) ? incoming.antigravityDirs : loaded.config.antigravityDirs,
+      codexDirs: Array.isArray(incoming.codexDirs) ? incoming.codexDirs : loaded.config.codexDirs,
+      port: typeof incoming.port === 'number' ? incoming.port : loaded.config.port,
+      pollIntervalMs: typeof incoming.pollIntervalMs === 'number' ? incoming.pollIntervalMs : loaded.config.pollIntervalMs,
+    };
+    replaceGlobalConfig(next);
+    res.json({ ok: true, savedTo: path, config: next });
   });
 
   // Simple HTTP JSON ingest for any custom model / agent script

@@ -2,6 +2,7 @@ import type {
   DashboardMetrics,
   DiscoveredSourceStatus,
   ModelUsageSummary,
+  ProjectUsageSummary,
   SourceKind,
   SourceUsageSummary,
   TelemetryEvent,
@@ -55,6 +56,19 @@ export function computeDashboardMetrics(
   const toolMap = new Map<
     string,
     { calls: number; errors: number; durationSum: number; totalTokens: number }
+  >();
+  const projectMap = new Map<
+    string,
+    {
+      workflows: Set<string>;
+      agents: Set<string>;
+      requests: number;
+      totalTokens: number;
+      inputTokens: number;
+      cachedReadTokens: number;
+      estimatedCostUsd: number;
+      lastSeenMs: number;
+    }
   >();
 
   for (const ev of events) {
@@ -129,6 +143,31 @@ export function computeDashboardMetrics(
     s.estimatedCostUsd += ev.estimatedCostUsd;
     if (ev.endTimeMs > s.lastSeenMs) s.lastSeenMs = ev.endTimeMs;
 
+    // By project / repo
+    const projName = ev.project?.trim() || 'Unassigned';
+    let p = projectMap.get(projName);
+    if (!p) {
+      p = {
+        workflows: new Set(),
+        agents: new Set(),
+        requests: 0,
+        totalTokens: 0,
+        inputTokens: 0,
+        cachedReadTokens: 0,
+        estimatedCostUsd: 0,
+        lastSeenMs: ev.endTimeMs,
+      };
+      projectMap.set(projName, p);
+    }
+    p.workflows.add(ev.workflowId);
+    p.agents.add(ev.agentId);
+    p.requests++;
+    p.totalTokens += ev.totalTokens;
+    p.inputTokens += ev.inputTokens;
+    p.cachedReadTokens += ev.cachedReadTokens;
+    p.estimatedCostUsd += ev.estimatedCostUsd;
+    if (ev.endTimeMs > p.lastSeenMs) p.lastSeenMs = ev.endTimeMs;
+
     // By tool
     if (ev.toolName) {
       let t = toolMap.get(ev.toolName);
@@ -193,6 +232,23 @@ export function computeDashboardMetrics(
     }))
     .sort((a, b) => b.totalTokens - a.totalTokens);
 
+  const byProject: ProjectUsageSummary[] = Array.from(projectMap.entries())
+    .map(([project, p]) => {
+      const pSide = p.inputTokens + p.cachedReadTokens;
+      return {
+        project,
+        workflows: p.workflows.size,
+        requests: p.requests,
+        agents: p.agents.size,
+        totalTokens: p.totalTokens,
+        cachedReadTokens: p.cachedReadTokens,
+        cacheHitRate: pSide > 0 ? p.cachedReadTokens / pSide : 0,
+        estimatedCostUsd: roundUsd(p.estimatedCostUsd),
+        lastSeenMs: p.lastSeenMs,
+      };
+    })
+    .sort((a, b) => b.totalTokens - a.totalTokens);
+
   const topTools = Array.from(toolMap.entries())
     .map(([toolName, t]) => ({
       toolName,
@@ -227,6 +283,7 @@ export function computeDashboardMetrics(
     timeSeries: buildTimeSeries(events),
     byModel,
     bySource,
+    byProject,
     topTools,
     insights: generateEfficiencyInsights(events),
     sources,

@@ -2,11 +2,13 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Download,
   GitBranch,
+  GitCompareArrows,
   LayoutDashboard,
   Moon,
   Play,
   Plug,
   RefreshCw,
+  Settings,
   Sun,
   Terminal,
   Trash2,
@@ -25,14 +27,18 @@ import {
 } from './api';
 import { AgentSwarmGraph } from './components/AgentSwarmGraph';
 import { AgentTimelineGantt } from './components/AgentTimelineGantt';
+import { ContextGrowthChart } from './components/ContextGrowthChart';
 import { EfficiencyInsights } from './components/EfficiencyInsights';
 import { ExportModal } from './components/ExportModal';
 import { KpiStrip } from './components/KpiStrip';
 import { LiveEventFeed } from './components/LiveEventFeed';
 import { ModelBreakdown } from './components/ModelBreakdown';
+import { ProjectBreakdown } from './components/ProjectBreakdown';
+import { SettingsModal } from './components/SettingsModal';
 import { SetupConnectModal } from './components/SetupConnectModal';
 import { TelemetryWidgets } from './components/TelemetryWidgets';
 import { TokenTimelineChart } from './components/TokenTimelineChart';
+import { WorkflowCompareModal } from './components/WorkflowCompareModal';
 import type {
   DashboardMetrics,
   TelemetryEvent,
@@ -76,6 +82,8 @@ export default function App() {
   const [simulating, setSimulating] = useState(false);
   const [showConnect, setShowConnect] = useState(false);
   const [showExport, setShowExport] = useState(false);
+  const [showCompare, setShowCompare] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
   const showToast = useCallback((msg: string) => {
@@ -278,6 +286,16 @@ export default function App() {
             )}
 
             <button
+              onClick={() => setShowCompare(true)}
+              disabled={workflows.length < 2}
+              className="flex items-center gap-1.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-3 py-1.5 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-muted)] hover:text-[var(--text-primary)] disabled:opacity-40"
+              title="Compare two workflows side-by-side"
+            >
+              <GitCompareArrows className="h-3.5 w-3.5" />
+              Compare
+            </button>
+
+            <button
               onClick={() => setShowExport(true)}
               className="flex items-center gap-1.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-3 py-1.5 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-muted)] hover:text-[var(--text-primary)]"
               title="Review and download telemetry JSON"
@@ -292,6 +310,15 @@ export default function App() {
             >
               <Plug className="h-3.5 w-3.5" />
               SDK / OTLP
+            </button>
+
+            <button
+              onClick={() => setShowSettings(true)}
+              className="flex h-8 w-8 items-center justify-center rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] text-[var(--text-secondary)] transition hover:bg-[var(--bg-muted)] hover:text-[var(--text-primary)]"
+              title="Settings & Custom Local Paths"
+              aria-label="Open Settings"
+            >
+              <Settings className="h-4 w-4" />
             </button>
 
             {/* Light / Dark Mode Switch */}
@@ -395,6 +422,7 @@ export default function App() {
 
             <TokenTimelineChart data={metrics.timeSeries} />
             <ModelBreakdown models={metrics.byModel} />
+            <ProjectBreakdown projects={metrics.byProject} />
 
             <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
               <div className="m-card rounded-2xl p-5 lg:col-span-5">
@@ -485,6 +513,7 @@ export default function App() {
               {graph ? (
                 <>
                   <AgentSwarmGraph graph={graph} />
+                  <ContextGrowthChart graph={graph} />
                   <AgentTimelineGantt graph={graph} />
                 </>
               ) : (
@@ -501,6 +530,17 @@ export default function App() {
 
       {showConnect && <SetupConnectModal onClose={() => setShowConnect(false)} />}
       {showExport && <ExportModal filters={filters} onClose={() => setShowExport(false)} />}
+      {showCompare && <WorkflowCompareModal workflows={workflows} onClose={() => setShowCompare(false)} />}
+      {showSettings && metrics && (
+        <SettingsModal
+          sources={metrics.sources}
+          onClose={() => setShowSettings(false)}
+          onSaved={() => {
+            void loadAll();
+            showToast('Saved custom paths & rescanned local sources');
+          }}
+        />
+      )}
     </div>
   );
 }
