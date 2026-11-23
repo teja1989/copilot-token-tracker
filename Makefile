@@ -11,7 +11,7 @@ NODE := $(shell \
 NODE_DIR := $(dir $(NODE))
 ENV_PATH := PATH="$(NODE_DIR):$(PATH)"
 
-.PHONY: help install start start-demo stop restart status logs test launch
+.PHONY: help install start start-demo stop restart status logs test launch release
 
 help:
 	@echo ""
@@ -24,6 +24,7 @@ help:
 	@echo "    make status       Check daemon status, PID, port, and event count"
 	@echo "    make logs         View recent daemon logs (including Models Identified)"
 	@echo "    make test         Run typecheck and unit/integration test suite"
+	@echo "    make release      Build self-contained release/agentpulse-v*.zip"
 	@echo "    make launch       Open the interactive menu"
 	@echo ""
 
@@ -53,3 +54,6 @@ test:
 
 launch:
 	@$(ENV_PATH) $(NODE) scripts/launch.mjs
+
+release:
+	@$(ENV_PATH) $(NODE) scripts/pack-release.mjs

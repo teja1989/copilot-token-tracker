@@ -66,8 +66,15 @@ export function ensureBuilt(force = false) {
     console.error(`✖ Node.js v20+ is required (detected v${process.versions.node}).`);
     process.exit(1);
   }
+  const alreadyPrebuilt =
+    !force &&
+    existsSync(join(ROOT, 'node_modules')) &&
+    existsSync(join(ROOT, 'dist', 'cli.js')) &&
+    existsSync(join(ROOT, 'web', 'dist', 'index.html'));
+  if (alreadyPrebuilt) return;
+
   const needRoot = force || !existsSync(join(ROOT, 'node_modules'));
-  const needWeb = force || !existsSync(join(ROOT, 'web', 'node_modules'));
+  const needWeb = force || (!existsSync(join(ROOT, 'web', 'node_modules')) && existsSync(join(ROOT, 'web', 'package.json')));
   const needBuild =
     force ||
     !existsSync(join(ROOT, 'dist', 'cli.js')) ||

@@ -35,6 +35,7 @@
     "daemon:restart": "node scripts/agentpulse-ctl.mjs restart",
     "daemon:status": "node scripts/agentpulse-ctl.mjs status",
     "daemon:logs": "node scripts/agentpulse-ctl.mjs logs",
+    "release:zip": "node scripts/pack-release.mjs",
     "start": "node dist/cli.js start",
     "typecheck": "tsc --noEmit && npm --prefix web run typecheck",
     "test": "vitest run",

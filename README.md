@@ -26,11 +26,22 @@ A **100% local-first**, IDE-agnostic observability platform that tracks **token 
 
 ---
 
-## Quick Start (Zero-Typing Team Launcher)
+## Quick Start (Zero-Clone Team Install)
 
 Requires **Node.js >= 20** (zero native C++ build dependencies).
 
-1. **Double-click to launch (recommended for teammates)**:
+### Option 1: Pre-Built Zip (Zero `git clone`, Zero `npm install`)
+Download `agentpulse-v*.zip` from **GitHub Releases** (or generate it locally with `npm run release:zip` / `make release` → `release/agentpulse-v1.0.0.zip`), unzip, and:
+- **macOS**: Double-click `start.command` (first time: right-click → Open if Gatekeeper prompts)
+- **Windows**: Double-click `start.bat`
+
+To publish a new GitHub Release zip automatically, just push a version tag:
+```bash
+git tag v1.0.0 && git push origin v1.0.0
+```
+
+### Option 2: From Source (Interactive Launcher or `make`)
+1. **Double-click to launch**:
    - **macOS**: Double-click `start.command` in Finder (first time: right-click → Open if Gatekeeper prompts)
    - **Windows**: Double-click `start.bat` in File Explorer
    - **Any OS (Terminal)**: `npm run launch` (or `make launch`)
