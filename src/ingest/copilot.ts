@@ -278,7 +278,118 @@ export function parseCopilotChatSessionJson(content: string, filePath: string): 
   return events;
 }
 
+export function parseCopilotChatSessionJsonl(content: string, filePath: string): TelemetryEvent[] {
+  // Newer VS Code versions write append-only JSONL patches:
+  // { kind: 0, v: { sessionId, requests: [...] } }
+  // { kind: 2, k: ["requests"], v: [ ...newRequests ] }
+  const session: CopilotChatSessionFile = { requests: [] };
+  for (const raw of content.split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    try {
+      const patch = JSON.parse(line) as { kind?: number; k?: string[]; v?: unknown };
+      if (patch.kind === 0 && patch.v && typeof patch.v === 'object') {
+        const init = patch.v as CopilotChatSessionFile;
+        if (init.sessionId) session.sessionId = init.sessionId;
+        if (init.customTitle) session.customTitle = init.customTitle;
+        if (init.creationDate) session.creationDate = init.creationDate;
+        if (Array.isArray(init.requests)) session.requests = [...init.requests];
+      } else if (
+        patch.kind === 2 &&
+        Array.isArray(patch.k) &&
+        patch.k[0] === 'requests' &&
+        Array.isArray(patch.v)
+      ) {
+        session.requests = [...(session.requests ?? []), ...(patch.v as NonNullable<CopilotChatSessionFile['requests']>)];
+      }
+    } catch {
+      // Skip malformed line
+    }
+  }
+  return parseCopilotChatSessionJson(JSON.stringify(session), filePath);
+}
+
 export function readCopilotChatSessionFile(filePath: string): TelemetryEvent[] {
   const content = readFileSync(filePath, 'utf8');
+  if (filePath.endsWith('.jsonl')) {
+    return parseCopilotChatSessionJsonl(content, filePath);
+  }
   return parseCopilotChatSessionJson(content, filePath);
+}
+
+/**
+ * Parses VS Code's `GitHub Copilot Chat.log` files, which are ALWAYS written even when
+ * `agent-traces.db` is disabled. Captures lines of the form:
+ *   2025-12-18 19:19:23.164 [info] ccreq:b16be73a.copilotmd | success | gpt-4o-mini-2024-07-18 | 325ms | [title]
+ */
+const CCREQ_RE =
+  /^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?)\s+\[\w+\]\s+ccreq:([a-zA-Z0-9_-]+)\.copilotmd\s+\|\s+(\w+)\s+\|\s+([^|]+?)\s+\|\s+(\d+)ms\s+\|\s+\[([^\]]+)\]/;
+
+export function parseCopilotChatLog(content: string, filePath: string): TelemetryEvent[] {
+  const events: TelemetryEvent[] = [];
+  // Group requests by VS Code log session folder (e.g. 20261010T141911)
+  const pathParts = filePath.replace(/\\/g, '/').split('/');
+  const logsIdx = pathParts.lastIndexOf('logs');
+  const sessionFolder = logsIdx >= 0 && pathParts[logsIdx + 1] ? pathParts[logsIdx + 1] : 'vscode-session';
+
+  for (const raw of content.split('\n')) {
+    const line = raw.trim();
+    if (!line.includes('ccreq:')) continue;
+    const m = CCREQ_RE.exec(line);
+    if (!m) continue;
+
+    const [, tsRaw, reqId, statusRaw, modelRaw, durationRaw, surfaceRaw] = m;
+    const endTimeMs = Date.parse(tsRaw.replace(' ', 'T')) || Date.now();
+    const durationMs = Math.max(1, Number(durationRaw) || 200);
+    const startTimeMs = endTimeMs - durationMs;
+    const model = modelRaw.trim();
+    const surface = surfaceRaw.trim();
+    const status = statusRaw.toLowerCase() === 'success' ? 'ok' : 'error';
+
+    // Copilot Chat.log does not print exact token counts for every request;
+    // record the real request, model, latency, surface, and Copilot premium multiplier.
+    const cost = estimateEventCost({
+      model,
+      inputTokens: 0,
+      outputTokens: 0,
+    });
+
+    events.push({
+      id: `copilot-log:${sessionFolder}:${reqId}`,
+      source: 'copilot',
+      isSimulated: false,
+      workflowId: `copilot-log:${sessionFolder}`,
+      workflowName: `Copilot Session · ${sessionFolder}`,
+      agentId: `copilot-log:${sessionFolder}:${surface}`,
+      agentName: `Copilot · ${surface}`,
+      agentRole: inferCopilotRole(surface),
+      kind: 'llm',
+      operation: `copilot:${surface}`,
+      provider: cost.provider,
+      model,
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedReadTokens: 0,
+      cacheWriteTokens: 0,
+      reasoningTokens: 0,
+      totalTokens: 0,
+      estimatedCostUsd: cost.estimatedCostUsd,
+      cacheSavingsUsd: 0,
+      copilotPremiumRequests: cost.copilotPremiumRequests,
+      costSource: cost.costSource,
+      startTimeMs,
+      endTimeMs,
+      durationMs,
+      status,
+      project: 'VS Code',
+      metadata: { logSource: 'GitHub Copilot Chat.log', surface },
+    });
+  }
+
+  return events;
+}
+
+export function readCopilotChatLogFile(filePath: string): TelemetryEvent[] {
+  const content = readFileSync(filePath, 'utf8');
+  return parseCopilotChatLog(content, filePath);
 }

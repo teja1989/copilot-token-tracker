@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { parseAntigravityTranscript } from '../src/ingest/antigravity.js';
 import { parseClaudeCodeJsonl } from '../src/ingest/claudeCode.js';
 import { parseCodexJsonl } from '../src/ingest/codex.js';
-import { COPILOT_ROLLUP_AGENT, mapCopilotTraceRow, parseCopilotChatSessionJson } from '../src/ingest/copilot.js';
+import {
+  COPILOT_ROLLUP_AGENT,
+  mapCopilotTraceRow,
+  parseCopilotChatLog,
+  parseCopilotChatSessionJson,
+  parseCopilotChatSessionJsonl,
+} from '../src/ingest/copilot.js';
 import { normalizeSimpleIngest, parseOtlpTraces } from '../src/ingest/otlp.js';
 
 describe('Multi-Source Parsers', () => {
@@ -53,6 +59,41 @@ describe('Multi-Source Parsers', () => {
     expect(events).toHaveLength(1);
     expect(events[0].model).toBe('gpt-4.1');
     expect(events[0].inputTokens).toBe(420);
+  });
+
+  it('parses VS Code Copilot JSONL chatSessions and GitHub Copilot Chat.log', () => {
+    const jsonl = [
+      JSON.stringify({ kind: 0, v: { sessionId: 's-jsonl', customTitle: 'Refactor API', requests: [] } }),
+      JSON.stringify({
+        kind: 2,
+        k: ['requests'],
+        v: [
+          {
+            requestId: 'r1',
+            timestamp: 1700000000000,
+            modelId: 'copilot/claude-sonnet-4-6',
+            agent: { name: 'Copilot Edits' },
+            message: { text: 'Refactor controller' },
+            response: [{ value: 'Updated controller' }],
+            result: { timings: { totalElapsed: 950 }, metadata: { promptTokens: 800, completionTokens: 250 } },
+          },
+        ],
+      }),
+    ].join('\n');
+    const sessionEvents = parseCopilotChatSessionJsonl(jsonl, '/tmp/s-jsonl.jsonl');
+    expect(sessionEvents).toHaveLength(1);
+    expect(sessionEvents[0].model).toBe('claude-sonnet-4-6');
+    expect(sessionEvents[0].inputTokens).toBe(800);
+
+    const log = [
+      '2025-12-18 19:19:23.164 [info] ccreq:b16be73a.copilotmd | success | gpt-4o-mini-2024-07-18 | 325ms | [title]',
+      '2025-12-24 18:02:51.971 [info] ccreq:973e3341.copilotmd | success | claude-sonnet-4-6 | 1420ms | [panel/editAgent]',
+    ].join('\n');
+    const logEvents = parseCopilotChatLog(log, '/Users/dev/Code/logs/20251224T180000/window1/exthost/GitHub.copilot-chat/GitHub Copilot Chat.log');
+    expect(logEvents).toHaveLength(2);
+    expect(logEvents[0].model).toBe('gpt-4o-mini-2024-07-18');
+    expect(logEvents[1].durationMs).toBe(1420);
+    expect(logEvents[1].agentRole).toBe('Coder');
   });
 
   it('parses Claude Code JSONL including subagents and prompt caching', () => {

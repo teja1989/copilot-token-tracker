@@ -3,37 +3,48 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 export interface DiscoveredPaths {
+  vscodeRootDirs: string[];
   copilotTracesDbs: string[];
   copilotChatSessions: string[];
+  copilotChatLogs: string[];
   claudeCodeJsonls: string[];
   antigravityTranscripts: string[];
   codexJsonls: string[];
 }
 
-function getVsCodeUserDirs(home: string): string[] {
+const VSCODE_VARIANTS = ['Code', 'Code - Insiders', 'VSCodium', 'Cursor', 'Windsurf'];
+
+export function getVsCodeRootDirs(home: string): string[] {
   const dirs: string[] = [];
+
+  // Optional custom override for corporate/portable VS Code installs
+  const envOverride = process.env.AGENTPULSE_VSCODE_DIR || process.env.VSCODE_USER_DATA_DIR;
+  if (envOverride) {
+    for (const part of envOverride.split(process.platform === 'win32' ? ';' : ':')) {
+      const trimmed = part.trim();
+      if (trimmed) dirs.push(trimmed);
+    }
+  }
+
   if (process.platform === 'darwin') {
-    dirs.push(
-      join(home, 'Library', 'Application Support', 'Code', 'User'),
-      join(home, 'Library', 'Application Support', 'Code - Insiders', 'User'),
-      join(home, 'Library', 'Application Support', 'Cursor', 'User'),
-    );
+    for (const v of VSCODE_VARIANTS) {
+      dirs.push(join(home, 'Library', 'Application Support', v));
+    }
   } else if (process.platform === 'win32') {
     const appData = process.env.APPDATA ?? join(home, 'AppData', 'Roaming');
-    dirs.push(
-      join(appData, 'Code', 'User'),
-      join(appData, 'Code - Insiders', 'User'),
-      join(appData, 'Cursor', 'User'),
-    );
+    const localAppData = process.env.LOCALAPPDATA ?? join(home, 'AppData', 'Local');
+    for (const v of VSCODE_VARIANTS) {
+      dirs.push(join(appData, v));
+      dirs.push(join(localAppData, v));
+    }
   } else {
     const xdg = process.env.XDG_CONFIG_HOME ?? join(home, '.config');
-    dirs.push(
-      join(xdg, 'Code', 'User'),
-      join(xdg, 'Code - Insiders', 'User'),
-      join(xdg, 'Cursor', 'User'),
-    );
+    for (const v of VSCODE_VARIANTS) {
+      dirs.push(join(xdg, v));
+    }
   }
-  return dirs.filter((d) => existsSync(d));
+
+  return Array.from(new Set(dirs)).filter((d) => existsSync(d));
 }
 
 function safeReaddir(dir: string): string[] {
@@ -44,7 +55,12 @@ function safeReaddir(dir: string): string[] {
   }
 }
 
-function collectFiles(dir: string, predicate: (fullPath: string, name: string) => boolean, maxDepth: number, depth = 0): string[] {
+function collectFiles(
+  dir: string,
+  predicate: (fullPath: string, name: string) => boolean,
+  maxDepth: number,
+  depth = 0,
+): string[] {
   if (depth > maxDepth || !existsSync(dir)) return [];
   const results: string[] = [];
   for (const name of safeReaddir(dir)) {
@@ -65,18 +81,35 @@ function collectFiles(dir: string, predicate: (fullPath: string, name: string) =
 
 export function discoverLocalSources(customHome?: string): DiscoveredPaths {
   const home = customHome ?? homedir();
+  const vscodeRootDirs = getVsCodeRootDirs(home);
 
   const copilotTracesDbs: string[] = [];
   const copilotChatSessions: string[] = [];
+  const copilotChatLogs: string[] = [];
 
-  for (const userDir of getVsCodeUserDirs(home)) {
+  for (const rootDir of vscodeRootDirs) {
+    // Support both rootDir = .../Code and rootDir = .../Code/User
+    const userDir = existsSync(join(rootDir, 'User')) ? join(rootDir, 'User') : rootDir;
+
+    // 1. Copilot globalStorage traces DB
     const globalCopilot = join(userDir, 'globalStorage', 'github.copilot-chat');
     if (existsSync(globalCopilot)) {
       copilotTracesDbs.push(
-        ...collectFiles(globalCopilot, (_p, n) => n === 'agent-traces.db' || n.endsWith('-traces.db'), 3),
+        ...collectFiles(globalCopilot, (_p, n) => n === 'agent-traces.db' || n.endsWith('-traces.db'), 4),
       );
     }
 
+    // 2. Empty-window chat sessions (.json and .jsonl)
+    const emptyWinChats = join(userDir, 'globalStorage', 'emptyWindowChatSessions');
+    if (existsSync(emptyWinChats)) {
+      for (const file of safeReaddir(emptyWinChats)) {
+        if (file.endsWith('.json') || file.endsWith('.jsonl')) {
+          copilotChatSessions.push(join(emptyWinChats, file));
+        }
+      }
+    }
+
+    // 3. Workspace storage: agent-traces.db + chatSessions (.json and .jsonl)
     const wsStorage = join(userDir, 'workspaceStorage');
     if (existsSync(wsStorage)) {
       for (const wsId of safeReaddir(wsStorage)) {
@@ -87,13 +120,33 @@ export function discoverLocalSources(customHome?: string): DiscoveredPaths {
         const chatDir = join(wsPath, 'chatSessions');
         if (existsSync(chatDir)) {
           for (const file of safeReaddir(chatDir)) {
-            if (file.endsWith('.json')) {
+            if (file.endsWith('.json') || file.endsWith('.jsonl')) {
               copilotChatSessions.push(join(chatDir, file));
             }
           }
         }
       }
     }
+
+    // 4. VS Code Extension Host logs: logs/<ts>/window*/exthost/GitHub.copilot-chat/GitHub Copilot Chat.log
+    const logsDir = join(rootDir, 'logs');
+    if (existsSync(logsDir)) {
+      copilotChatLogs.push(
+        ...collectFiles(
+          logsDir,
+          (_p, n) => n === 'GitHub Copilot Chat.log',
+          5,
+        ),
+      );
+    }
+  }
+
+  // Also check ~/.copilot for standalone Copilot CLI / agent traces
+  const dotCopilot = join(home, '.copilot');
+  if (existsSync(dotCopilot)) {
+    copilotTracesDbs.push(
+      ...collectFiles(dotCopilot, (_p, n) => n === 'agent-traces.db' || n.endsWith('-traces.db'), 3),
+    );
   }
 
   const claudeProjectsDir = join(home, '.claude', 'projects');
@@ -118,8 +171,10 @@ export function discoverLocalSources(customHome?: string): DiscoveredPaths {
   );
 
   return {
+    vscodeRootDirs,
     copilotTracesDbs: Array.from(new Set(copilotTracesDbs)),
     copilotChatSessions: Array.from(new Set(copilotChatSessions)),
+    copilotChatLogs: Array.from(new Set(copilotChatLogs)),
     claudeCodeJsonls: Array.from(new Set(claudeCodeJsonls)),
     antigravityTranscripts: Array.from(new Set(antigravityTranscripts)),
     codexJsonls: Array.from(new Set(codexJsonls)),

@@ -9,7 +9,11 @@ import {
 } from './antigravity.js';
 import { readClaudeCodeFile } from './claudeCode.js';
 import { readCodexFile } from './codex.js';
-import { readCopilotChatSessionFile, readCopilotTracesDb } from './copilot.js';
+import {
+  readCopilotChatLogFile,
+  readCopilotChatSessionFile,
+  readCopilotTracesDb,
+} from './copilot.js';
 import { discoverLocalSources } from './discovery.js';
 
 export class LocalCollector {
@@ -70,8 +74,12 @@ export class LocalCollector {
     try {
       const discovered = discoverLocalSources(this.customHome);
 
-      // 1. Copilot
-      const copilotPaths = [...discovered.copilotTracesDbs, ...discovered.copilotChatSessions];
+      // 1. Copilot (traces DB + chatSessions .json/.jsonl + GitHub Copilot Chat.log)
+      const copilotPaths = [
+        ...discovered.copilotTracesDbs,
+        ...discovered.copilotChatSessions,
+        ...discovered.copilotChatLogs,
+      ];
       const copilotStatus = this.sourceStatuses.get('copilot')!;
       copilotStatus.detected = copilotPaths.length > 0;
       copilotStatus.paths = copilotPaths;
@@ -88,6 +96,13 @@ export class LocalCollector {
           if (!force && !this.fileChanged(chatPath)) continue;
           scannedFiles++;
           const events = readCopilotChatSessionFile(chatPath);
+          const added = this.store.upsert(events);
+          totalAdded += added.length;
+        }
+        for (const logPath of discovered.copilotChatLogs) {
+          if (!force && !this.fileChanged(logPath)) continue;
+          scannedFiles++;
+          const events = readCopilotChatLogFile(logPath);
           const added = this.store.upsert(events);
           totalAdded += added.length;
         }

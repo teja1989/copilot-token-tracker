@@ -113,9 +113,11 @@ async function runDiagnostics() {
   console.log(`\n${C.cyan}▶ Checking local AI agent sources on this machine...${C.reset}`);
   const { discoverLocalSources } = await import(join(ROOT, 'dist', 'ingest', 'discovery.js'));
   const found = discoverLocalSources();
+  console.log(`  ${C.dim}VS Code root dirs found: ${found.vscodeRootDirs.length > 0 ? found.vscodeRootDirs.join(', ') : 'none (set AGENTPULSE_VSCODE_DIR if using a custom path)'}${C.reset}`);
   const rows = [
     ['GitHub Copilot (traces DB)', found.copilotTracesDbs.length],
     ['GitHub Copilot (chat sessions)', found.copilotChatSessions.length],
+    ['GitHub Copilot (Chat.log)', found.copilotChatLogs.length],
     ['Claude Code (JSONL)', found.claudeCodeJsonls.length],
     ['Antigravity (transcripts)', found.antigravityTranscripts.length],
     ['OpenAI Codex CLI (JSONL)', found.codexJsonls.length],
