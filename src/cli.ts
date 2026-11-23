@@ -148,10 +148,19 @@ async function main() {
     openBrowser(url);
   }
 
+  let shuttingDown = false;
   const shutdown = () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     collector.stopPolling();
     store.flushNow();
+    // Close active SSE / keep-alive sockets immediately so Ctrl+C / stop never hangs
+    if (typeof server.closeAllConnections === 'function') {
+      server.closeAllConnections();
+    }
     server.close(() => process.exit(0));
+    const forceTimer = setTimeout(() => process.exit(0), 800);
+    if (typeof forceTimer.unref === 'function') forceTimer.unref();
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);

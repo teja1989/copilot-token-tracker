@@ -33,24 +33,22 @@ Requires **Node.js >= 20** (zero native C++ build dependencies).
 1. **Double-click to launch (recommended for teammates)**:
    - **macOS**: Double-click `start.command` in Finder (first time: right-click → Open if Gatekeeper prompts)
    - **Windows**: Double-click `start.bat` in File Explorer
-   - **Any OS (Terminal)**: `npm run launch` (or `node scripts/launch.mjs`)
+   - **Any OS (Terminal)**: `npm run launch` (or `make launch`)
 
-   The interactive launcher automatically installs dependencies, builds the dashboard on first run, and lets you start Live Local mode, Demo Multi-Agent Swarm mode, Custom Port, or Diagnostics with a single keypress.
+   The interactive launcher shows live daemon status and lets you **Start in Background**, **Stop**, view **Status & Logs**, configure custom local paths, or run diagnostics with a single keypress.
 
-2. **Manual CLI setup**:
+2. **Background Daemon via `make` or `npm` (macOS / Linux / Windows)**:
 
 ```bash
-git clone https://github.com/teja1989/copilot-token-tracker.git
-cd copilot-token-tracker
-
-# Install root + dashboard dependencies and build
-npm install
-npm --prefix web install
-npm run build
-
-# Start the local observatory (auto-discovers local AI logs & opens dashboard)
-npm start
+make install      # Auto-install dependencies & build server + dashboard
+make start        # Start AgentPulse in the background & open dashboard
+make status       # Check PID, port, uptime, and total spans
+make logs         # View recent logs (including Models Identified)
+make stop         # Stop the background daemon cleanly
+make restart      # Restart the background daemon
 ```
+
+*(On Windows PowerShell without `make`, use the equivalent npm scripts: `npm run setup`, `npm run daemon:start`, `npm run daemon:status`, `npm run daemon:logs`, `npm run daemon:stop`.)*
 
 Or install the `agentpulse` CLI globally on your machine:
 
